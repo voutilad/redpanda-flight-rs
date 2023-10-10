@@ -1,0 +1,9 @@
+{
+  "type": "record",
+  "name": "sensor_sample",
+  "fields": [
+    { "name": "timestamp", "type": "long", "logicalType": "timestamp-millis" },
+    { "name": "identifier", "type": "string", "logicalType": "uuid" },
+    { "name": "value", "type": ["long", "null"] }
+  ]
+}

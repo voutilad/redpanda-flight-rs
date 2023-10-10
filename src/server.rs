@@ -1,6 +1,6 @@
 use tracing::warn;
 
-use futures::stream::BoxStream;
+use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 
 use arrow_flight::flight_service_server::FlightService;
@@ -15,13 +15,6 @@ pub struct RedpandaFlightService {}
 #[tonic::async_trait]
 impl FlightService for RedpandaFlightService {
     type HandshakeStream = BoxStream<'static, Result<HandshakeResponse, Status>>;
-    type ListFlightsStream = BoxStream<'static, Result<FlightInfo, Status>>;
-    type DoGetStream = BoxStream<'static, Result<FlightData, Status>>;
-    type DoPutStream = BoxStream<'static, Result<PutResult, Status>>;
-    type DoActionStream = BoxStream<'static, Result<arrow_flight::Result, Status>>;
-    type ListActionsStream = BoxStream<'static, Result<ActionType, Status>>;
-    type DoExchangeStream = BoxStream<'static, Result<FlightData, Status>>;
-
     async fn handshake(
         &self,
         _request: Request<Streaming<HandshakeRequest>>,
@@ -29,15 +22,15 @@ impl FlightService for RedpandaFlightService {
         warn!("handshake not implemented");
         Err(Status::unimplemented("Implement handshake"))
     }
-
+    type ListFlightsStream = BoxStream<'static, Result<FlightInfo, Status>>;
     async fn list_flights(
         &self,
         _request: Request<Criteria>,
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
-        warn!("list_flights not implemented");
-        Err(Status::unimplemented("Implement list_flights"))
+        let vec: Vec<Result<FlightInfo, Status>> = Vec::new();
+        let stream = futures::stream::iter(vec);
+        Ok(Response::new(stream.boxed()))
     }
-
     async fn get_flight_info(
         &self,
         _request: Request<FlightDescriptor>,
@@ -45,7 +38,6 @@ impl FlightService for RedpandaFlightService {
         warn!("get_flight_info not implemented");
         Err(Status::unimplemented("Implement get_flight_info"))
     }
-
     async fn get_schema(
         &self,
         _request: Request<FlightDescriptor>,
@@ -53,6 +45,7 @@ impl FlightService for RedpandaFlightService {
         warn!("get_schema not implemented");
         Err(Status::unimplemented("Implement get_schema"))
     }
+    type DoGetStream = BoxStream<'static, Result<FlightData, Status>>;
 
     async fn do_get(
         &self,
@@ -62,6 +55,8 @@ impl FlightService for RedpandaFlightService {
         Err(Status::unimplemented("Implement do_get"))
     }
 
+    type DoPutStream = BoxStream<'static, Result<PutResult, Status>>;
+
     async fn do_put(
         &self,
         _request: Request<Streaming<FlightData>>,
@@ -69,6 +64,18 @@ impl FlightService for RedpandaFlightService {
         warn!("do_put not implemented");
         Err(Status::unimplemented("Implement do_put"))
     }
+
+    type DoExchangeStream = BoxStream<'static, Result<FlightData, Status>>;
+
+    async fn do_exchange(
+        &self,
+        _request: Request<Streaming<FlightData>>,
+    ) -> Result<Response<Self::DoExchangeStream>, Status> {
+        warn!("do_exchange not implemented");
+        Err(Status::unimplemented("Implement do_exchange"))
+    }
+
+    type DoActionStream = BoxStream<'static, Result<arrow_flight::Result, Status>>;
 
     async fn do_action(
         &self,
@@ -78,19 +85,17 @@ impl FlightService for RedpandaFlightService {
         Err(Status::unimplemented("Implement do_action"))
     }
 
+    type ListActionsStream = BoxStream<'static, Result<ActionType, Status>>;
+
     async fn list_actions(
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
-        warn!("list_actions not implemented");
-        Err(Status::unimplemented("Implement list_actions"))
-    }
-
-    async fn do_exchange(
-        &self,
-        _request: Request<Streaming<FlightData>>,
-    ) -> Result<Response<Self::DoExchangeStream>, Status> {
-        warn!("do_exchange not implemented");
-        Err(Status::unimplemented("Implement do_exchange"))
+        let actions: Vec<_> = vec![Ok(ActionType {
+            r#type: "type 1".into(),
+            description: "something".into(),
+        })];
+        let actions_stream = futures::stream::iter(actions);
+        Ok(Response::new(actions_stream.boxed()))
     }
 }

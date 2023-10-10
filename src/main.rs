@@ -1,4 +1,6 @@
 mod server;
+mod registry;
+mod schema;
 
 use std::env;
 
