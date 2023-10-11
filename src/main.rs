@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = "127.0.0.1:9999".parse().unwrap();
     let seeds = "debian-gnu-linux:19092";
-    let rpfs = server::RedpandaFlightService::new(seeds, "_schema");
+    let rpfs = server::RedpandaFlightService::new(seeds, "_schemas");
 
     let svc = FlightServiceServer::new(rpfs);
 
