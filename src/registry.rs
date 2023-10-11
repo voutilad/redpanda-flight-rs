@@ -1,17 +1,14 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 
-use crate::schema::{RedpandaSchema, Schema};
-use futures::FutureExt;
-use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use futures::StreamExt;
 use rdkafka::config::RDKafkaLogLevel;
-use rdkafka::consumer::{Consumer, ConsumerContext, MessageStream, StreamConsumer};
-use rdkafka::error::{KafkaError, KafkaResult};
+use rdkafka::consumer::{Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use tokio::sync::{RwLock, RwLockReadGuard};
-use tokio::task::{JoinError, JoinHandle};
+use tracing::info;
+
+use crate::schema::{RedpandaSchema, Schema};
 
 struct RegistryContext;
 impl ClientContext for RegistryContext {}
@@ -72,10 +69,12 @@ impl Registry {
             let value: RedpandaSchema =
                 serde_json::from_slice(message.payload().unwrap_or(&[])).unwrap();
             let schema = Schema::from(value).unwrap();
+            info!("parsed schema for {}", schema.topic);
 
             // Grab the write lock and insert.
             let mut map = map.write().await;
             map.insert(schema.topic.clone(), schema);
+            drop(map);
         }
         Ok(())
     }
