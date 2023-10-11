@@ -3,7 +3,9 @@ use std::string::String;
 use apache_avro::schema as avro_schema;
 use arrow::datatypes as arrow_datatypes;
 use arrow::datatypes::{TimeUnit, UnionMode};
+use serde::Deserialize;
 
+/// Represents a known Redpanda Topic Schema.
 pub struct Schema {
     pub topic: String,
     pub id: i64,
@@ -12,7 +14,17 @@ pub struct Schema {
     schema_arrow: arrow_datatypes::Schema,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct RedpandaSchema {
+    pub subject: String,
+    pub version: u64,
+    pub id: u64,
+    pub schema: String,
+}
+
 fn avro_to_arrow_types(schema: &avro_schema::Schema) -> Result<arrow_datatypes::DataType, String> {
+    /// Type mapping from an Avro RecordSchema field type to an Arrow DataType.
+    /// TODO: Things get a bit messy with complex types, so skip most of those for now.
     match schema {
         avro_schema::Schema::Null => Ok(arrow_datatypes::DataType::Null),
         avro_schema::Schema::Boolean => Ok(arrow_datatypes::DataType::Boolean),
@@ -66,17 +78,18 @@ fn avro_to_arrow(avro: &avro_schema::RecordSchema) -> Result<arrow_datatypes::Sc
 }
 
 impl Schema {
-    pub fn from(json: String) -> Result<Schema, String> {
-        let avro = avro_schema::Schema::parse_str(json.as_str()).unwrap();
+    pub fn from(value: RedpandaSchema) -> Result<Schema, String> {
+        let avro = avro_schema::Schema::parse_str(value.schema.as_str()).unwrap();
         let record = match avro {
             avro_schema::Schema::Record(r) => r,
             _ => panic!("not a record schema!"),
         };
         let arrow = avro_to_arrow(&record).unwrap();
+        let topic = String::from(value.subject.trim_end_matches("-value"));
         Ok(Schema {
-            topic: String::from(""),
-            id: -1,
-            version: -1,
+            topic,
+            id: value.id as i64,
+            version: value.version as i64,
             schema_avro: record,
             schema_arrow: arrow,
         })
@@ -90,21 +103,34 @@ mod tests {
     static SAMPLE_SCHEMA: &str = include_str!("fixtures/sample_value_schema.json");
 
     #[test]
-    fn initializing() {
-        let schema = Schema::from(String::from(SAMPLE_SCHEMA));
-        assert!(schema.is_ok());
-        let avro = schema?.schema_avro;
-        let arrow = schema?.schema_arrow;
+    fn can_convert_avro_to_arrow() {
+        let input = RedpandaSchema {
+            subject: String::from("sensor-value"),
+            version: 1,
+            id: 2,
+            schema: String::from(SAMPLE_SCHEMA),
+        };
+        let schema = Schema::from(input).unwrap();
+        let avro = schema.schema_avro;
+        let arrow = schema.schema_arrow;
         assert_eq!(3, avro.fields.len(), "should have 3 Avro fields");
         assert_eq!(3, arrow.fields.len(), "should have 3 Arrow fields");
         assert_eq!(
             arrow_datatypes::DataType::Utf8,
-            arrow.field_with_name("uuid").unwrap().data_type(),
+            arrow
+                .field_with_name("identifier")
+                .unwrap()
+                .data_type()
+                .clone(),
             "uuid should be a utf8 string"
         );
         assert_eq!(
             arrow_datatypes::DataType::Timestamp(TimeUnit::Millisecond, None),
-            arrow.field_with_name("timestamp"),
+            arrow
+                .field_with_name("timestamp")
+                .unwrap()
+                .data_type()
+                .clone(),
             "timestamp should be in millis"
         );
     }

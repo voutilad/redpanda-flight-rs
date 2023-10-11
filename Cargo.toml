@@ -12,6 +12,8 @@ arrow-flight = { version = "47.0.0", features = ["tls"] }
 futures = "0.3.28"
 log = "0.4.20"
 rdkafka = { version = "0.34.0", features = ["sasl", "ssl", "libz", "zstd"] }
+serde = { version = "1.0.188", features = ["derive"] }
+serde_json = "1.0.107"
 tokio = { version = "1.33.0", features = ["macros", "rt", "rt-multi-thread"] }
 tonic = { version = "0.10.2", features = ["tls", "gzip"] }
 tracing = "0.1.37"

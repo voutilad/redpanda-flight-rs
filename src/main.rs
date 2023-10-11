@@ -1,15 +1,15 @@
-mod server;
 mod registry;
 mod schema;
+mod server;
 
 use std::env;
 
 use tracing::info;
 use tracing_subscriber;
 
-use tonic::transport::Server;
+use crate::registry::Registry;
 use arrow_flight::flight_service_server::FlightServiceServer;
-
+use tonic::transport::Server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,7 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let addr = "127.0.0.1:9999".parse().unwrap();
-    let rpfs = server::RedpandaFlightService{};
+    let seeds = "debian-gnu-linux:19092";
+    let rpfs = server::RedpandaFlightService::new(seeds, "_schema");
 
     let svc = FlightServiceServer::new(rpfs);
 

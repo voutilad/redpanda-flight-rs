@@ -3,14 +3,26 @@ use tracing::warn;
 use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::registry::Registry;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
 
-#[derive(Clone)]
-pub struct RedpandaFlightService {}
+pub struct RedpandaFlightService {
+    pub registry: Registry,
+    pub seeds: String,
+}
+
+impl RedpandaFlightService {
+    pub fn new(seeds: &str, topic: &str) -> RedpandaFlightService {
+        RedpandaFlightService {
+            registry: Registry::new(topic, seeds).unwrap(),
+            seeds: String::from(seeds),
+        }
+    }
+}
 
 #[tonic::async_trait]
 impl FlightService for RedpandaFlightService {
