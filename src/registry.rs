@@ -1,11 +1,17 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{RwLock, RwLockReadGuard};
-
-use rdkafka::config::RDKafkaLogLevel;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::{ClientConfig, ClientContext, Message};
+use std::future::Future;
+use std::sync::Arc;
 
 use crate::schema::{RedpandaSchema, Schema};
+use futures::FutureExt;
+use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use rdkafka::config::RDKafkaLogLevel;
+use rdkafka::consumer::{Consumer, ConsumerContext, MessageStream, StreamConsumer};
+use rdkafka::error::{KafkaError, KafkaResult};
+use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
+use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::task::{JoinError, JoinHandle};
 
 struct RegistryContext;
 impl ClientContext for RegistryContext {}
@@ -13,8 +19,7 @@ impl ConsumerContext for RegistryContext {}
 
 pub struct Registry {
     topic: String,
-    map: RwLock<HashMap<String, Schema>>,
-    consumer: BaseConsumer<RegistryContext>,
+    map: Arc<RwLock<HashMap<String, Schema>>>,
 }
 
 impl Registry {
@@ -27,43 +32,56 @@ impl Registry {
             .set("enable.auto.commit", "true")
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
-        let consumer: BaseConsumer<RegistryContext> =
+        let consumer: StreamConsumer<RegistryContext> =
             match base_config.create_with_context(RegistryContext {}) {
                 Ok(c) => c,
                 Err(e) => return Err(e.to_string()),
             };
 
-        if consumer.subscribe(&[topic]).is_err() {
-            Err(String::from("failed to subscribe to schema registry topic"))
-        } else {
-            Ok(Registry {
-                topic: String::from(topic),
-                map: RwLock::new(HashMap::new()),
-                consumer,
-            })
+        // We don't use subscription mode as that creates consumer group behavior.
+        let mut tpl = TopicPartitionList::default();
+        tpl.add_partition(topic, 0);
+        if consumer.assign(&tpl).is_err() {
+            return Err(String::from("failed to assign topic partition to consumer"));
         }
+
+        let map = Arc::new(RwLock::new(HashMap::new()));
+        let registry = Registry {
+            topic: String::from(topic),
+            map: map.clone(),
+        };
+        let f = tokio::spawn(async move { Registry::hydrate(consumer, map).await });
+        Ok(registry)
     }
 
-    pub fn hydrate(&self) -> Result<usize, String> {
-        let mut map = self.map.write().unwrap();
-        let mut cnt: usize = 0;
-
-        for result in self.consumer.iter() {
-            let message = match result {
-                Ok(m) => m,
-                Err(_) => return Err(String::from("no message")),
+    async fn hydrate(
+        consumer: StreamConsumer<RegistryContext>,
+        map: Arc<RwLock<HashMap<String, Schema>>>,
+    ) -> Result<(), String> {
+        /// Update the view of the Schema Registry.
+        ///
+        let mut stream = consumer.stream();
+        loop {
+            let message = match stream.next().await {
+                None => break,
+                Some(r) => match r {
+                    Ok(m) => m,
+                    Err(_) => return Err(String::from("failure")),
+                },
             };
             let value: RedpandaSchema =
                 serde_json::from_slice(message.payload().unwrap_or(&[])).unwrap();
             let schema = Schema::from(value).unwrap();
+
+            // Grab the write lock and insert.
+            let mut map = map.write().await;
             map.insert(schema.topic.clone(), schema);
-            cnt += 1;
         }
-        Ok(cnt)
+        Ok(())
     }
 
-    pub fn lookup(&self, topic: &str) -> Option<RwLockReadGuard<HashMap<String, Schema>>> {
-        let map = self.map.read().unwrap();
+    pub async fn lookup(&self, topic: &str) -> Option<RwLockReadGuard<HashMap<String, Schema>>> {
+        let map = self.map.read().await;
         if map.contains_key(topic) {
             Some(map)
         } else {
