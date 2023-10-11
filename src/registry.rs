@@ -4,7 +4,7 @@ use std::sync::Arc;
 use futures::StreamExt;
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, ConsumerContext, StreamConsumer};
-use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
+use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{RwLock, RwLockReadGuard};
 use tracing::info;
 
@@ -36,8 +36,10 @@ impl Registry {
             };
 
         // We don't use subscription mode as that creates consumer group behavior.
-        let mut tpl = TopicPartitionList::default();
+        let mut tpl = TopicPartitionList::new();
         tpl.add_partition(topic, 0);
+        tpl.set_partition_offset(topic, 0, Offset::Beginning)
+            .unwrap();
         if consumer.assign(&tpl).is_err() {
             return Err(String::from("failed to assign topic partition to consumer"));
         }
