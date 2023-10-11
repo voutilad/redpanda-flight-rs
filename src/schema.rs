@@ -78,11 +78,11 @@ fn avro_to_arrow(avro: &avro_schema::RecordSchema) -> Result<arrow_datatypes::Sc
 }
 
 impl Schema {
-    pub fn from(value: RedpandaSchema) -> Result<Schema, String> {
+    pub fn from(value: &RedpandaSchema) -> Result<Schema, String> {
         let avro = avro_schema::Schema::parse_str(value.schema.as_str()).unwrap();
         let record = match avro {
             avro_schema::Schema::Record(r) => r,
-            _ => panic!("not a record schema!"),
+            _ => return Err(String::from("not a record schema")),
         };
         let arrow = avro_to_arrow(&record).unwrap();
         let topic = String::from(value.subject.trim_end_matches("-value"));
@@ -110,7 +110,7 @@ mod tests {
             id: 2,
             schema: String::from(SAMPLE_SCHEMA),
         };
-        let schema = Schema::from(input).unwrap();
+        let schema = Schema::from(&input).unwrap();
         let avro = schema.schema_avro;
         let arrow = schema.schema_arrow;
         assert_eq!(3, avro.fields.len(), "should have 3 Avro fields");

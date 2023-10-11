@@ -66,13 +66,18 @@ impl Registry {
                 None => break,
                 Some(r) => match r {
                     Ok(m) => m,
-                    Err(_) => return Err(String::from("failure")),
+                    Err(_) => return Err(String::from("unexpected stream failure")),
                 },
             };
             let value: RedpandaSchema =
                 serde_json::from_slice(message.payload().unwrap_or(&[])).unwrap();
-            let schema = Schema::from(value).unwrap();
-            info!("parsed schema for {}", schema.topic);
+            let result = Schema::from(&value);
+            if result.is_err() {
+                info!("can't parse schema for subject {}", value.subject);
+                continue;
+            }
+            let schema = result.unwrap();
+            info!("parsed a schema for {}", schema.topic);
 
             // Grab the write lock and insert.
             let mut map = map.write().await;
