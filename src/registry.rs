@@ -58,6 +58,7 @@ impl Registry {
         /// Update the view of the Schema Registry.
         ///
         let mut stream = consumer.stream();
+        info!("hydrating");
         loop {
             let message = match stream.next().await {
                 None => break,
