@@ -87,12 +87,11 @@ impl Registry {
         Ok(())
     }
 
-    pub async fn lookup(&self, topic: &str) -> Option<RwLockReadGuard<HashMap<String, Schema>>> {
+    pub async fn lookup(&self, topic: &str) -> Option<Schema> {
         let map = self.map.read().await;
-        if map.contains_key(topic) {
-            Some(map)
-        } else {
-            None
+        match map.get(topic) {
+            Some(s) => Some(s.clone()),
+            None => None,
         }
     }
 }

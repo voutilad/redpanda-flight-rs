@@ -6,12 +6,13 @@ use arrow::datatypes::{TimeUnit, UnionMode};
 use serde::Deserialize;
 
 /// Represents a known Redpanda Topic Schema.
+#[derive(Clone)]
 pub struct Schema {
     pub topic: String,
     pub id: i64,
     pub version: i64,
     schema_avro: avro_schema::RecordSchema,
-    schema_arrow: arrow_datatypes::Schema,
+    pub schema_arrow: arrow_datatypes::Schema,
 }
 
 #[derive(Deserialize, Debug)]

@@ -4,6 +4,8 @@ use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::registry::Registry;
+use crate::schema::Schema;
+use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
@@ -54,8 +56,29 @@ impl FlightService for RedpandaFlightService {
         &self,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<SchemaResult>, Status> {
-        warn!("get_schema not implemented");
-        Err(Status::unimplemented("Implement get_schema"))
+        let req = _request.get_ref();
+        if req.r#type() == DescriptorType::Cmd {
+            return Err(Status::invalid_argument(
+                "only PATH type descriptors are supported",
+            ));
+        }
+        if req.path.len() > 1 {
+            return Err(Status::invalid_argument("invalid path format"));
+        }
+
+        let empty = String::new();
+        let topic = req.path.first().unwrap_or(&empty);
+        let result = self.registry.lookup(topic.as_str()).await;
+        let schema = match result {
+            None => return Err(Status::not_found("no schema for topic")),
+            Some(s) => s,
+        };
+        let info = FlightInfo::new()
+            .try_with_schema(&schema.schema_arrow)
+            .unwrap();
+        Ok(Response::new(SchemaResult {
+            schema: info.schema,
+        }))
     }
     type DoGetStream = BoxStream<'static, Result<FlightData, Status>>;
 
