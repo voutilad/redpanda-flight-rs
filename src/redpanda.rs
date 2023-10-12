@@ -73,7 +73,7 @@ impl Redpanda {
                     .iter()
                     .map(|partition| {
                         /// TODO: better error handling
-                        let (hi, lo) = self
+                        let (lo, hi) = self
                             .metadata_client
                             .fetch_watermarks(
                                 name,
