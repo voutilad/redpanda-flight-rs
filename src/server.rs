@@ -3,8 +3,8 @@ use tracing::warn;
 use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::redpanda::Redpanda;
 use crate::registry::Registry;
-use crate::schema::Schema;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::{
@@ -13,6 +13,7 @@ use arrow_flight::{
 };
 
 pub struct RedpandaFlightService {
+    pub redpanda: Redpanda,
     pub registry: Registry,
     pub seeds: String,
 }
@@ -20,6 +21,7 @@ pub struct RedpandaFlightService {
 impl RedpandaFlightService {
     pub fn new(seeds: &str, topic: &str) -> RedpandaFlightService {
         RedpandaFlightService {
+            redpanda: Redpanda::connect(seeds).unwrap(),
             registry: Registry::new(topic, seeds).unwrap(),
             seeds: String::from(seeds),
         }

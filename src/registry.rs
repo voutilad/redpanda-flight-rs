@@ -35,6 +35,7 @@ impl Registry {
                 Err(e) => return Err(e.to_string()),
             };
 
+        // TODO: The StreamConsumer isn't async. Need to revisit this.
         // We don't use subscription mode as that creates consumer group behavior.
         let mut tpl = TopicPartitionList::new();
         tpl.add_partition(topic, 0);

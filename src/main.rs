@@ -5,6 +5,7 @@ use tonic::transport::Server;
 use tracing::info;
 use tracing_subscriber;
 
+mod redpanda;
 mod registry;
 mod schema;
 mod server;
