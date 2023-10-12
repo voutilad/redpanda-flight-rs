@@ -50,26 +50,39 @@ impl FlightService for RedpandaFlightService {
         };
         let mut results: Vec<Result<FlightInfo, Status>> = Vec::with_capacity(topics.len());
 
-        for topic in topics {
-            let schema = match self.registry.lookup(topic.topic.as_str()).await {
+        for t in topics {
+            let schema = match self.registry.lookup(t.topic.as_str()).await {
                 Some(s) => s,
                 None => {
-                    warn!("topic {} missing value schema", topic.topic);
+                    warn!("topic {} missing value schema", t.topic);
                     continue;
                 }
             };
-            let desc = FlightDescriptor::new_path(vec![topic.topic]);
+            let desc = FlightDescriptor::new_path(vec![t.topic.clone()]);
 
             // TODO: tie into service Location
-            let endpoint = FlightEndpoint::new().with_location("grpc+tcp://127.0.0.1:9999");
-            match FlightInfo::new().try_with_schema(&schema.schema_arrow) {
-                Ok(info) => results.push(Ok(info
-                    .with_descriptor(desc)
-                    .with_endpoint(endpoint)
-                    .with_ordered(true)
-                    .with_total_records(topic.messages as i64))),
-                Err(e) => results.push(Err(Status::internal(e.to_string()))),
-            }
+            let result = match FlightInfo::new().try_with_schema(&schema.schema_arrow) {
+                Ok(mut info) => {
+                    info = info
+                        .with_descriptor(desc)
+                        .with_ordered(true)
+                        .with_total_records(t.messages as i64);
+                    for pid in t.partitions {
+                        info = info.with_endpoint(
+                            FlightEndpoint::new()
+                                .with_location("grpc+tcp://localhost:9999")
+                                .with_ticket(Ticket::new(String::from_iter([
+                                    t.topic.clone().as_str(),
+                                    "/",
+                                    pid.to_string().as_str(),
+                                ]))),
+                        )
+                    }
+                    Ok(info)
+                }
+                Err(e) => Err(Status::internal(e.to_string())),
+            };
+            results.push(result);
         }
 
         let stream = futures::stream::iter(results);
