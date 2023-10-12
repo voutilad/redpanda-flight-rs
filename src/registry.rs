@@ -5,7 +5,7 @@ use futures::StreamExt;
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::schema::{RedpandaSchema, Schema};

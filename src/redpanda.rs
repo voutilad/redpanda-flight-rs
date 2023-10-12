@@ -1,10 +1,9 @@
-use arrow::array::Array;
+use std::time::Duration;
+
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::KafkaResult;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientConfig, ClientContext};
-use std::time::Duration;
 use tracing::info;
 
 struct RedpandaContext;

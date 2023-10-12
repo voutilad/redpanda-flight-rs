@@ -1,19 +1,15 @@
-use arrow::error::ArrowError;
-use std::future::Future;
-use tracing::warn;
-
-use futures::stream::{BoxStream, StreamExt};
-use tonic::{Request, Response, Status, Streaming};
-
-use crate::redpanda::{Redpanda, Topic};
-use crate::registry::Registry;
-use crate::schema::Schema;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
+use futures::stream::{BoxStream, StreamExt};
+use tonic::{Request, Response, Status, Streaming};
+use tracing::warn;
+
+use crate::redpanda::{Redpanda, Topic};
+use crate::registry::Registry;
 
 pub struct RedpandaFlightService {
     pub redpanda: Redpanda,
