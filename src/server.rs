@@ -1,3 +1,4 @@
+use arrow::error::ArrowError;
 use std::future::Future;
 use tracing::warn;
 
@@ -65,12 +66,14 @@ impl FlightService for RedpandaFlightService {
 
             // TODO: tie into service Location
             let endpoint = FlightEndpoint::new().with_location("grpc+tcp://127.0.0.1:9999");
-            let value = Ok(FlightInfo::new()
-                .with_descriptor(desc)
-                .with_endpoint(endpoint)
-                .with_ordered(true)
-                .with_total_records(topic.messages as i64));
-            results.push(value);
+            match FlightInfo::new().try_with_schema(&schema.schema_arrow) {
+                Ok(info) => results.push(Ok(info
+                    .with_descriptor(desc)
+                    .with_endpoint(endpoint)
+                    .with_ordered(true)
+                    .with_total_records(topic.messages as i64))),
+                Err(e) => results.push(Err(Status::internal(e.to_string()))),
+            }
         }
 
         let stream = futures::stream::iter(results);
