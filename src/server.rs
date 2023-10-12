@@ -1,14 +1,16 @@
+use std::future::Future;
 use tracing::warn;
 
 use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::redpanda::Redpanda;
+use crate::redpanda::{Redpanda, Topic};
 use crate::registry::Registry;
+use crate::schema::Schema;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::{
-    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
 
@@ -19,10 +21,10 @@ pub struct RedpandaFlightService {
 }
 
 impl RedpandaFlightService {
-    pub fn new(seeds: &str, topic: &str) -> RedpandaFlightService {
+    pub fn new(seeds: &str, schemas_topic: &str) -> RedpandaFlightService {
         RedpandaFlightService {
             redpanda: Redpanda::connect(seeds).unwrap(),
-            registry: Registry::new(topic, seeds).unwrap(),
+            registry: Registry::new(schemas_topic, seeds).unwrap(),
             seeds: String::from(seeds),
         }
     }
@@ -44,7 +46,34 @@ impl FlightService for RedpandaFlightService {
         _request: Request<Criteria>,
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
         let vec: Vec<Result<FlightInfo, Status>> = Vec::new();
-        let stream = futures::stream::iter(vec);
+
+        let topics: Vec<Topic> = match self.redpanda.list_topics() {
+            Ok(v) => v,
+            Err(e) => return Err(Status::internal(e)), // XXX fail hard for now
+        };
+        let mut results: Vec<Result<FlightInfo, Status>> = Vec::with_capacity(topics.len());
+
+        for topic in topics {
+            let schema = match self.registry.lookup(topic.topic.as_str()).await {
+                Some(s) => s,
+                None => {
+                    warn!("topic {} missing value schema", topic.topic);
+                    continue;
+                }
+            };
+            let desc = FlightDescriptor::new_path(vec![topic.topic]);
+
+            // TODO: tie into service Location
+            let endpoint = FlightEndpoint::new().with_location("grpc+tcp://127.0.0.1:9999");
+            let value = Ok(FlightInfo::new()
+                .with_descriptor(desc)
+                .with_endpoint(endpoint)
+                .with_ordered(true)
+                .with_total_records(topic.messages as i64));
+            results.push(value);
+        }
+
+        let stream = futures::stream::iter(results);
         Ok(Response::new(stream.boxed()))
     }
     async fn get_flight_info(

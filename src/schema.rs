@@ -4,6 +4,7 @@ use apache_avro::schema as avro_schema;
 use arrow::datatypes as arrow_datatypes;
 use arrow::datatypes::{TimeUnit, UnionMode};
 use serde::Deserialize;
+use tracing::debug;
 
 /// Represents a known Redpanda Topic Schema.
 #[derive(Clone)]
@@ -69,7 +70,7 @@ fn avro_to_arrow(avro: &avro_schema::RecordSchema) -> Result<arrow_datatypes::Sc
         .fields
         .iter()
         .map(|f| {
-            println!("checking field {:?}", f.schema);
+            debug!("checking field {:?}", f.schema);
             let datatype = avro_to_arrow_types(&f.schema).unwrap();
             arrow_datatypes::Field::new(&f.name, datatype, f.is_nullable())
         })
