@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use rdkafka::config::RDKafkaLogLevel;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, MessageStream};
 use rdkafka::util::Timeout;
 use rdkafka::{ClientConfig, ClientContext};
 use tracing::info;
@@ -9,12 +9,6 @@ use tracing::info;
 struct RedpandaContext;
 impl ClientContext for RedpandaContext {}
 impl ConsumerContext for RedpandaContext {}
-
-/// Redpanda service abstraction.
-pub struct Redpanda {
-    pub seeds: String,
-    metadata_client: BaseConsumer<RedpandaContext>,
-}
 
 /// Represent information about a Topic in Redpanda.
 pub struct Topic {
@@ -24,9 +18,17 @@ pub struct Topic {
     pub bytes: usize,
 }
 
+pub struct BoundedStream {}
+
+/// Redpanda service abstraction.
+pub struct Redpanda {
+    pub seeds: String,
+    metadata_client: BaseConsumer<RedpandaContext>,
+}
+
 impl Redpanda {
+    /// Initialize a Redpanda connection, establishing the metadata client.
     pub fn connect(seeds: &str) -> Result<Redpanda, String> {
-        /// Initialize a Redpanda connection, establishing the metadata client.
         let base_config: ClientConfig = ClientConfig::new()
             .set("bootstrap.servers", seeds)
             .set_log_level(RDKafkaLogLevel::Warning)
@@ -72,7 +74,7 @@ impl Redpanda {
                     .partitions()
                     .iter()
                     .map(|partition| {
-                        /// TODO: better error handling
+                        // TODO: better error handling
                         let (lo, hi) = self
                             .metadata_client
                             .fetch_watermarks(
@@ -94,5 +96,10 @@ impl Redpanda {
             })
             .collect();
         Ok(result)
+    }
+
+    /// Generate a bounded stream from a topic partition.
+    pub async fn stream(&self, topic: &str, partition: i32) -> Result<MessageStream, String> {
+        Ok()
     }
 }

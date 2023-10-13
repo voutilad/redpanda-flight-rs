@@ -16,6 +16,7 @@ pub struct Schema {
     pub schema_arrow: arrow_datatypes::Schema,
 }
 
+/// Represents an entry in the Redpanda Schema Registry as seen from the underlying topic.
 #[derive(Deserialize, Debug)]
 pub struct RedpandaSchema {
     pub subject: String,
@@ -24,9 +25,9 @@ pub struct RedpandaSchema {
     pub schema: String,
 }
 
+/// Type mapping from an Apache Avro [RecordSchema](avro_schema::RecordSchema) field type to an Apache Arrow [DataType](arrow_datatypes::DataType).
+/// TODO: Things get a bit messy with complex types, so skip most of those for now.
 fn avro_to_arrow_types(schema: &avro_schema::Schema) -> Result<arrow_datatypes::DataType, String> {
-    /// Type mapping from an Avro RecordSchema field type to an Arrow DataType.
-    /// TODO: Things get a bit messy with complex types, so skip most of those for now.
     match schema {
         avro_schema::Schema::Null => Ok(arrow_datatypes::DataType::Null),
         avro_schema::Schema::Boolean => Ok(arrow_datatypes::DataType::Boolean),
@@ -64,8 +65,8 @@ fn avro_to_arrow_types(schema: &avro_schema::Schema) -> Result<arrow_datatypes::
     }
 }
 
+/// Convert a given Apache Avro [RecordSchema](avro_schema::RecordSchema) to an approximate Apache Arrow [Schema](arrow_datatypes::Schema).
 fn avro_to_arrow(avro: &avro_schema::RecordSchema) -> Result<arrow_datatypes::Schema, String> {
-    /// Convert a given Avro RecordSchema to an approximate Arrow schema.
     let fields: Vec<arrow_datatypes::Field> = avro
         .fields
         .iter()
@@ -80,6 +81,8 @@ fn avro_to_arrow(avro: &avro_schema::RecordSchema) -> Result<arrow_datatypes::Sc
 }
 
 impl Schema {
+    /// Build a Schema from a RedpandaSchema (provided via the Schema Registry), parsing the Apache Avro
+    /// schema representation, and generating an analogous Apache Arrow representation.
     pub fn from(value: &RedpandaSchema) -> Result<Schema, String> {
         let avro = avro_schema::Schema::parse_str(value.schema.as_str()).unwrap();
         let record = match avro {

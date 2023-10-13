@@ -14,14 +14,15 @@ struct RegistryContext;
 impl ClientContext for RegistryContext {}
 impl ConsumerContext for RegistryContext {}
 
+/// A client for interacting with the Redpanda Schema Registry via the internal topic (i.e. via the Kafka API).
 pub struct Registry {
     topic: String,
     map: Arc<RwLock<HashMap<String, Schema>>>,
 }
 
 impl Registry {
+    /// Create a new Registry instance.
     pub fn new(topic: &str, seeds: &str) -> Result<Registry, String> {
-        /// Create a new Registry instance.
         let base_config: ClientConfig = ClientConfig::new()
             .set("group.id", "redpanda-flight-registry")
             .set("bootstrap.servers", seeds)
@@ -54,12 +55,11 @@ impl Registry {
         Ok(registry)
     }
 
+    /// Update the view of the Schema Registry.
     async fn hydrate(
         consumer: StreamConsumer<RegistryContext>,
         map: Arc<RwLock<HashMap<String, Schema>>>,
     ) -> Result<(), String> {
-        /// Update the view of the Schema Registry.
-        ///
         let mut stream = consumer.stream();
         info!("hydrating");
         loop {
