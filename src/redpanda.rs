@@ -44,8 +44,8 @@ pub struct BatchingStream {
     /// Estimate of how many messages remain in the stream. May not be accurate due to compaction.
     pub remainder: AtomicUsize,
 
-    /// Target high-water mark determining the end of the stream.
-    pub target_watermark: i64,
+    /// Target offset determining the end of the stream for a topic partition.
+    pub target_offset: i64,
 
     _permit: OwnedSemaphorePermit,
 
@@ -61,7 +61,7 @@ impl BatchingStream {
     /// Consume the next n items.
     pub async fn next_batch(&self) -> Result<Option<Vec<OwnedMessage>>, String> {
         // Most likely reason to bail early is we're past our expected watermark.
-        if self.last_offset >= self.target_watermark {
+        if self.last_offset >= self.target_offset {
             debug!("stream {} consumed; past watermark", self.stream_id);
             return Ok(None);
         }
@@ -90,7 +90,7 @@ impl BatchingStream {
             debug!("added message with offset {}", offset);
 
             self.remainder.fetch_sub(1, Ordering::Relaxed);
-            if offset >= self.target_watermark {
+            if offset >= self.target_offset {
                 break;
             }
             if v.len() == self.batch_size {
@@ -275,7 +275,7 @@ impl Redpanda {
         Ok(BatchingStream {
             batch_size: DEFAULT_BATCH_SIZE, // TODO: configure
             remainder: AtomicUsize::new((tp.watermarks.1 - tp.watermarks.0) as usize),
-            target_watermark: tp.watermarks.1,
+            target_offset: tp.watermarks.1 - 1, // XXX Redpanda reports offset + 1!
             _permit: permit,
             consumer,
             stream_id,
