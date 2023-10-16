@@ -9,7 +9,7 @@ use rdkafka::message::OwnedMessage;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::info;
+use tracing::{error, info};
 
 struct RedpandaContext;
 impl ClientContext for RedpandaContext {}
@@ -73,7 +73,10 @@ impl BatchingStream {
                 None => break,
                 Some(r) => match r {
                     Ok(m) => m.detach(),
-                    Err(e) => return Err(e.to_string()),
+                    Err(e) => {
+                        error!("kafka error consuming stream: {}", e);
+                        return Err(e.to_string());
+                    }
                 },
             };
             let offset = msg.offset();
@@ -186,7 +189,10 @@ impl Redpanda {
         let consumer: StreamConsumer<RedpandaContext> =
             match base_config.create_with_context(RedpandaContext {}) {
                 Ok(c) => c,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => {
+                    error!("error creating StreamConsumer: {}", e);
+                    return Err(e.to_string());
+                }
             };
 
         // TODO: this is blocking...needs asyncification
@@ -197,7 +203,10 @@ impl Redpanda {
             .unwrap();
         match consumer.assign(&tpl) {
             Ok(_) => {}
-            Err(e) => return Err(e.to_string()),
+            Err(e) => {
+                error!("error assigning TopicPartitionList {:?}", tpl);
+                return Err(e.to_string());
+            }
         };
 
         Ok(BatchingStream {
