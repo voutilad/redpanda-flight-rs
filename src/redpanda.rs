@@ -159,7 +159,7 @@ impl Redpanda {
     }
 
     /// Generate a bounded stream from a topic partition.
-    pub async fn stream(&self, tp: TopicPartition) -> Result<BatchingStream, String> {
+    pub async fn stream(&self, tp: &TopicPartition) -> Result<BatchingStream, String> {
         let permit = match self.stream_permits.clone().acquire_owned().await {
             Ok(p) => p,
             Err(e) => return Err(e.to_string()),

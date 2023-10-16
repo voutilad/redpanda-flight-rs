@@ -6,9 +6,9 @@ use arrow_flight::{
 };
 use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
-use tracing::warn;
+use tracing::{error, warn};
 
-use crate::redpanda::{Redpanda, Topic, TopicPartition};
+use crate::redpanda::{BatchingStream, Redpanda, Topic, TopicPartition};
 use crate::registry::Registry;
 
 pub struct RedpandaFlightService {
@@ -142,8 +142,14 @@ impl FlightService for RedpandaFlightService {
             watermarks: (0, 0),
             bytes: 0,
         };
-        let x = self.redpanda.stream(tp).await.expect("TODO: panic message");
-        x.next_batch().await.unwrap();
+        let stream = match self.redpanda.stream(&tp).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("failed to create stream for {:?}", tp);
+                return Err(Status::internal(e));
+            }
+        };
+        stream.next_batch().await.unwrap();
         Err(Status::unimplemented("Implement do_get"))
     }
 
