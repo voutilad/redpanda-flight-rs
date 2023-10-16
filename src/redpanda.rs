@@ -217,8 +217,8 @@ impl Redpanda {
         };
 
         debug!(
-            "creating BatchingStream for topic partition {}/{} with id {}",
-            tp.topic, tp.id, stream_id
+            "creating BatchingStream for topic partition {}/{}, target watermark {}, and id {}",
+            tp.topic, tp.id, tp.watermarks.1, stream_id
         );
         Ok(BatchingStream {
             batch_size: DEFAULT_BATCH_SIZE, // TODO: configure
