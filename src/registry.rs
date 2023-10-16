@@ -16,7 +16,7 @@ impl ConsumerContext for RegistryContext {}
 
 /// A client for interacting with the Redpanda Schema Registry via the internal topic (i.e. via the Kafka API).
 pub struct Registry {
-    topic: String,
+    pub topic: String,
     map: Arc<RwLock<HashMap<String, Schema>>>,
 }
 
@@ -51,7 +51,7 @@ impl Registry {
             topic: String::from(topic),
             map: map.clone(),
         };
-        let f = tokio::spawn(async move { Registry::hydrate(consumer, map).await });
+        tokio::spawn(async move { Registry::hydrate(consumer, map).await });
         Ok(registry)
     }
 

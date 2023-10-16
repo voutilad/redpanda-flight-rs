@@ -1,29 +1,90 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use rdkafka::config::RDKafkaLogLevel;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, MessageStream};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, StreamConsumer};
+use rdkafka::message::OwnedMessage;
 use rdkafka::util::Timeout;
-use rdkafka::{ClientConfig, ClientContext};
+use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::info;
 
 struct RedpandaContext;
 impl ClientContext for RedpandaContext {}
 impl ConsumerContext for RedpandaContext {}
 
-/// Represent information about a Topic in Redpanda.
-pub struct Topic {
+const DEFAULT_BATCH_SIZE: usize = 100;
+
+/// Represents information about a Topic-Partition in Redpanda.
+/// N.b. some of these types are signed because of RDKafka & Java :(
+#[derive(Debug)]
+pub struct TopicPartition {
+    /// Name of the topic.
     pub topic: String,
-    pub partitions: Vec<i32>,
-    pub messages: u32,
+    /// Partition id.
+    pub id: i32,
+    /// Low and High watermarks (offsets) for the partition. Nb. May not form a contiguous range!
+    pub watermarks: (i64, i64),
+    /// Approximate size of the partition (on disk).
     pub bytes: usize,
 }
 
-pub struct BoundedStream {}
+/// Represents information about a Topic in Redpanda.
+pub struct Topic {
+    pub topic: String,
+    pub partitions: Vec<TopicPartition>,
+}
+
+pub struct BatchingStream {
+    pub batch_size: usize,
+
+    /// Estimate of how many messages remain in the stream. May not be accurate due to compaction.
+    pub remainder: AtomicUsize,
+
+    /// Target high-water mark determining the end of the stream.
+    pub target_watermark: i64,
+
+    permit: OwnedSemaphorePermit,
+
+    consumer: StreamConsumer<RedpandaContext>,
+}
+
+impl BatchingStream {
+    /// Consume the next n items.
+    pub async fn next_batch(&self) -> Result<Vec<OwnedMessage>, String> {
+        let mut v: Vec<OwnedMessage> = Vec::with_capacity(self.batch_size);
+        let mut stream = self.consumer.stream();
+        loop {
+            let msg = match stream.next().await {
+                None => break,
+                Some(r) => match r {
+                    Ok(m) => m.detach(),
+                    Err(e) => return Err(e.to_string()),
+                },
+            };
+            let offset = msg.offset();
+            v.push(msg);
+
+            self.remainder.fetch_sub(1, Ordering::Relaxed);
+            if offset == self.target_watermark {
+                break;
+            }
+            if v.len() == self.batch_size {
+                break;
+            }
+        }
+
+        Ok(v)
+    }
+}
 
 /// Redpanda service abstraction.
 pub struct Redpanda {
     pub seeds: String,
     metadata_client: BaseConsumer<RedpandaContext>,
+    stream_permits: Arc<Semaphore>,
 }
 
 impl Redpanda {
@@ -51,6 +112,7 @@ impl Redpanda {
                 Ok(Redpanda {
                     seeds: String::from(seeds),
                     metadata_client,
+                    stream_permits: Arc::new(Semaphore::new(10)), // TODO: arbitrary
                 })
             }
         }
@@ -70,28 +132,26 @@ impl Redpanda {
             .iter()
             .map(|topic| {
                 let name = topic.name();
-                let cnt: i64 = topic
+                let partitions: Vec<TopicPartition> = topic
                     .partitions()
                     .iter()
-                    .map(|partition| {
-                        // TODO: better error handling
-                        let (lo, hi) = self
+                    .map(|p| {
+                        // XXX TODO: this call is blocking
+                        let (low, high) = self
                             .metadata_client
-                            .fetch_watermarks(
-                                name,
-                                partition.id(),
-                                Timeout::After(Duration::from_secs(5)),
-                            )
-                            .unwrap();
-                        // Return the delta
-                        hi - lo
+                            .fetch_watermarks(name, p.id(), Timeout::After(Duration::from_secs(5)))
+                            .unwrap_or((0, 0));
+                        TopicPartition {
+                            topic: String::from(name),
+                            id: p.id(),
+                            watermarks: (low, high),
+                            bytes: 0, // TODO: need to use that api call for log dir size
+                        }
                     })
-                    .sum();
+                    .collect();
                 Topic {
                     topic: String::from(name),
-                    partitions: topic.partitions().iter().map(|p| p.id()).collect(),
-                    messages: cnt as u32, // XXX TODO: shitty cast
-                    bytes: 0, // TODO: we need to use that admin api call to get log dir sizes
+                    partitions,
                 }
             })
             .collect();
@@ -99,7 +159,41 @@ impl Redpanda {
     }
 
     /// Generate a bounded stream from a topic partition.
-    pub async fn stream(&self, topic: &str, partition: i32) -> Result<MessageStream, String> {
-        Ok()
+    pub async fn stream(&self, tp: TopicPartition) -> Result<BatchingStream, String> {
+        let permit = match self.stream_permits.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(e) => return Err(e.to_string()),
+        };
+
+        // TODO: batching goes here?
+        // TODO: max.poll.records or something?
+        let base_config: ClientConfig = ClientConfig::new()
+            .set("bootstrap.servers", self.seeds.clone())
+            .set_log_level(RDKafkaLogLevel::Warning)
+            .clone();
+        let consumer: StreamConsumer<RedpandaContext> =
+            match base_config.create_with_context(RedpandaContext {}) {
+                Ok(c) => c,
+                Err(e) => return Err(e.to_string()),
+            };
+
+        // TODO: this is blocking...needs asyncification
+        // Assign a topic partition to this consumer.
+        let mut tpl = TopicPartitionList::new();
+        tpl.add_partition(tp.topic.as_str(), tp.id);
+        tpl.set_partition_offset(tp.topic.as_str(), tp.id, Offset::Beginning)
+            .unwrap();
+        match consumer.assign(&tpl) {
+            Ok(_) => {}
+            Err(e) => return Err(e.to_string()),
+        };
+
+        Ok(BatchingStream {
+            batch_size: DEFAULT_BATCH_SIZE, // TODO: configure
+            remainder: AtomicUsize::new((tp.watermarks.1 - tp.watermarks.0) as usize),
+            target_watermark: tp.watermarks.1,
+            permit,
+            consumer,
+        })
     }
 }

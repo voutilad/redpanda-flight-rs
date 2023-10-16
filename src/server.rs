@@ -8,7 +8,7 @@ use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::warn;
 
-use crate::redpanda::{Redpanda, Topic};
+use crate::redpanda::{Redpanda, Topic, TopicPartition};
 use crate::registry::Registry;
 
 pub struct RedpandaFlightService {
@@ -42,7 +42,7 @@ impl FlightService for RedpandaFlightService {
         &self,
         _request: Request<Criteria>,
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
-        let vec: Vec<Result<FlightInfo, Status>> = Vec::new();
+        // let vec: Vec<Result<FlightInfo, Status>> = Vec::new();
 
         let topics: Vec<Topic> = match self.redpanda.list_topics() {
             Ok(v) => v,
@@ -66,15 +66,20 @@ impl FlightService for RedpandaFlightService {
                     info = info
                         .with_descriptor(desc)
                         .with_ordered(true)
-                        .with_total_records(t.messages as i64);
-                    for pid in t.partitions {
+                        .with_total_records(
+                            t.partitions
+                                .iter()
+                                .map(|p| p.watermarks.1 - p.watermarks.0)
+                                .sum(),
+                        );
+                    for tp in t.partitions {
                         info = info.with_endpoint(
                             FlightEndpoint::new()
                                 .with_location("grpc+tcp://localhost:9999")
                                 .with_ticket(Ticket::new(String::from_iter([
                                     t.topic.clone().as_str(),
                                     "/",
-                                    pid.to_string().as_str(),
+                                    tp.id.to_string().as_str(),
                                 ]))),
                         )
                     }
@@ -130,6 +135,15 @@ impl FlightService for RedpandaFlightService {
         _request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
         warn!("do_get not implemented");
+
+        let tp = TopicPartition {
+            topic: "".to_string(),
+            id: 0,
+            watermarks: (0, 0),
+            bytes: 0,
+        };
+        let x = self.redpanda.stream(tp).await.expect("TODO: panic message");
+        x.next_batch().await.unwrap();
         Err(Status::unimplemented("Implement do_get"))
     }
 
