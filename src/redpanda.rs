@@ -58,7 +58,7 @@ pub struct BatchingStream {
     /// Target high-water mark determining the end of the stream.
     pub target_watermark: i64,
 
-    permit: OwnedSemaphorePermit,
+    _permit: OwnedSemaphorePermit,
 
     consumer: StreamConsumer<RedpandaContext>,
 }
@@ -204,7 +204,7 @@ impl Redpanda {
             batch_size: DEFAULT_BATCH_SIZE, // TODO: configure
             remainder: AtomicUsize::new((tp.watermarks.1 - tp.watermarks.0) as usize),
             target_watermark: tp.watermarks.1,
-            permit,
+            _permit: permit,
             consumer,
         })
     }

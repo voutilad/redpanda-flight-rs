@@ -1,6 +1,7 @@
+use std::str::FromStr;
+
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::utils::batches_to_flight_data;
@@ -8,23 +9,18 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
-use async_stream::stream;
 use futures::stream;
 use futures::stream::{BoxStream, StreamExt};
-use rdkafka::message::OwnedMessage;
-use std::num::ParseIntError;
-use std::str::FromStr;
-use std::string::FromUtf8Error;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{error, warn};
 
-use crate::redpanda::{BatchingStream, Redpanda, Topic, TopicPartition};
+use crate::redpanda::{Redpanda, Topic, TopicPartition};
 use crate::registry::Registry;
-use crate::schema::Schema;
 
 /// Used to join a topic name and a partition id to form a ticket. By choice, this separator
 /// contains value(s) not valid for Apache Kafka Topics.
 const TICKET_SEPARATOR: &str = "/";
+const TICKET_SEPARATOR_BYTE: &u8 = &b'/';
 
 pub struct RedpandaFlightService {
     pub redpanda: Redpanda,
@@ -169,33 +165,44 @@ impl FlightService for RedpandaFlightService {
             )));
         }
 
-        let parts: Vec<String> = ticket
-            .rsplitn(2, |c| c.to_string() == TICKET_SEPARATOR)
-            .map(|part| {
-                String::from_utf8(Vec::from(part))
-                    .expect("non utf-8 char in ticket even though we checked is_ascii?!")
-            })
-            .collect();
-        if parts.len() != 2 {
-            return Err(Status::internal("something went wrong in ticket parsing"));
-        }
-        let topic = match parts.first() {
-            None => {
+        //
+        // The TICKET_SEPARATOR is not a valid topic name character, so there should be 1 occurrence.
+        //
+        let idx = ticket
+            .iter()
+            .rposition(|c| c == TICKET_SEPARATOR_BYTE)
+            .unwrap_or(0);
+        let parts = ticket.split_at(idx);
+        let topic = match String::from_utf8(parts.0.to_vec()) {
+            Err(e) => {
+                warn!("problem parsing topic: {}", e);
                 return Err(Status::failed_precondition(
                     "bad topic in redpanda-flight ticket",
-                ))
+                ));
             }
-            Some(t) => t,
+            Ok(t) => t,
         };
-        let pid = match i32::from_str(parts.last().unwrap_or(&String::from("")).as_str()) {
-            Ok(pid) => pid,
+        let pid = match String::from_utf8(parts.1.to_vec()) {
+            Ok(s) => match i32::from_str(s.as_str()) {
+                Ok(pid) => pid,
+                Err(e) => {
+                    warn!("problem parsing partition id: {}", e);
+                    return Err(Status::failed_precondition(
+                        "bad partition id in redpanda-flight ticket",
+                    ));
+                }
+            },
             Err(e) => {
+                warn!("bad partition id: {}", e);
                 return Err(Status::failed_precondition(
-                    "partition id in ticket must be numeric",
-                ))
+                    "bad partition id in redpanda-flight ticket",
+                ));
             }
         };
 
+        //
+        // Now that we know the intended topic, make sure we've got a schema.
+        //
         let schema = match self.registry.lookup(topic.as_str()).await {
             None => return Err(Status::not_found("no matching schema found")),
             Some(s) => s,
