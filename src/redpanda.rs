@@ -32,18 +32,6 @@ pub struct TopicPartition {
     pub bytes: usize,
 }
 
-impl TopicPartition {
-    /// Create a new TopicPartition by copying the provided values.
-    pub fn new_from(topic: &str, id: i32) -> TopicPartition {
-        TopicPartition {
-            topic: String::from(topic),
-            id,
-            watermarks: (0, 0),
-            bytes: 0,
-        }
-    }
-}
-
 /// Represents information about a Topic in Redpanda.
 pub struct Topic {
     pub topic: String,
@@ -189,6 +177,56 @@ impl Redpanda {
                 }
             })
             .collect();
+        Ok(result)
+    }
+
+    /// Fetch information on a particular topic partition (i.e. watermarks).
+    pub fn get_topic_partition(&self, topic: &str, pid: i32) -> Result<TopicPartition, String> {
+        // XXX TODO: this is blocking!
+        let metadata = match self
+            .metadata_client
+            .fetch_metadata(Some(topic), Timeout::After(Duration::from_secs(5)))
+        {
+            Ok(m) => m,
+            Err(e) => return Err(e.to_string()),
+        };
+        if metadata.topics().len() != 1 {
+            error!(
+                "bad metadata response, expected 1 topic but got {}",
+                metadata.topics().len()
+            );
+            return Err(String::from("unexpected metadata response"));
+        }
+        let topic_meta = metadata.topics().first().unwrap();
+        let partition = match topic_meta.partitions().iter().find(|&p| p.id() == pid) {
+            None => {
+                error!("failed to find partition {} for topic {}", pid, topic);
+                return Err(String::from("cannot find partition for topic"));
+            }
+            Some(p) => p,
+        };
+        // XXX TODO: this is blocking?!
+        let watermarks = match self.metadata_client.fetch_watermarks(
+            topic,
+            pid,
+            Timeout::After(Duration::from_secs(5)),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                error!(
+                    "failed to fetch watermarks for partition {} of topic {}",
+                    pid, topic
+                );
+                return Err(e.to_string());
+            }
+        };
+
+        let result = TopicPartition {
+            topic: String::from(topic),
+            id: partition.id(),
+            watermarks,
+            bytes: 0,
+        };
         Ok(result)
     }
 

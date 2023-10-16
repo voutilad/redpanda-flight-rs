@@ -14,7 +14,7 @@ use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
-use crate::redpanda::{Redpanda, Topic, TopicPartition};
+use crate::redpanda::{Redpanda, Topic};
 use crate::registry::Registry;
 
 /// Used to join a topic name and a partition id to form a ticket. By choice, this separator
@@ -218,8 +218,16 @@ impl FlightService for RedpandaFlightService {
         };
 
         // TODO: do we need a cache of watermarks? or just do another lookup via the kafka api?
-        let tp = TopicPartition::new_from(topic.as_str(), pid);
-
+        let tp = match self.redpanda.get_topic_partition(topic.as_str(), pid) {
+            Ok(tp) => tp,
+            Err(e) => {
+                error!(
+                    "failed to find topic partition for {}/{}: {}",
+                    topic, pid, e
+                );
+                return Err(Status::not_found("no matching topic partition found"));
+            }
+        };
         let batches = match self.redpanda.stream(&tp).await {
             Ok(s) => s,
             Err(e) => {
