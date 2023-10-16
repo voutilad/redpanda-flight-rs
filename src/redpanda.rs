@@ -9,13 +9,14 @@ use rdkafka::message::OwnedMessage;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 struct RedpandaContext;
 impl ClientContext for RedpandaContext {}
 impl ConsumerContext for RedpandaContext {}
 
 const DEFAULT_BATCH_SIZE: usize = 100;
+static STREAM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Represents information about a Topic-Partition in Redpanda.
 /// N.b. some of these types are signed because of RDKafka & Java :(
@@ -61,6 +62,9 @@ pub struct BatchingStream {
     _permit: OwnedSemaphorePermit,
 
     consumer: StreamConsumer<RedpandaContext>,
+
+    /// A simple identifier for this stream, for now.
+    _id: usize,
 }
 
 impl BatchingStream {
@@ -179,11 +183,13 @@ impl Redpanda {
             Ok(p) => p,
             Err(e) => return Err(e.to_string()),
         };
+        let stream_id = STREAM_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         // TODO: batching goes here?
         // TODO: max.poll.records or something?
         let base_config: ClientConfig = ClientConfig::new()
             .set("bootstrap.servers", self.seeds.clone())
+            .set("group.id", format!("redpanda-flight-stream-{}", stream_id))
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
         let consumer: StreamConsumer<RedpandaContext> =
@@ -209,12 +215,17 @@ impl Redpanda {
             }
         };
 
+        debug!(
+            "creating BatchingStream for topic partition {}/{} with id {}",
+            tp.topic, tp.id, stream_id
+        );
         Ok(BatchingStream {
             batch_size: DEFAULT_BATCH_SIZE, // TODO: configure
             remainder: AtomicUsize::new((tp.watermarks.1 - tp.watermarks.0) as usize),
             target_watermark: tp.watermarks.1,
             _permit: permit,
             consumer,
+            _id: stream_id,
         })
     }
 }
