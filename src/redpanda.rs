@@ -85,6 +85,7 @@ impl BatchingStream {
             };
             let offset = msg.offset();
             v.push(msg);
+            debug!("added message with offset {}", offset);
 
             self.remainder.fetch_sub(1, Ordering::Relaxed);
             if offset == self.target_watermark {
