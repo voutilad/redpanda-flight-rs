@@ -12,7 +12,7 @@ use arrow_flight::{
 use futures::stream;
 use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::redpanda::{Redpanda, Topic, TopicPartition};
 use crate::registry::Registry;
@@ -173,6 +173,8 @@ impl FlightService for RedpandaFlightService {
             .rposition(|c| c == TICKET_SEPARATOR_BYTE)
             .unwrap_or(0);
         let parts = ticket.split_at(idx);
+        info!("parsing ticket: {:?}", parts);
+
         let topic = match String::from_utf8(parts.0.to_vec()) {
             Err(e) => {
                 warn!("problem parsing topic: {}", e);
