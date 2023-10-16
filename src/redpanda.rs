@@ -31,6 +31,18 @@ pub struct TopicPartition {
     pub bytes: usize,
 }
 
+impl TopicPartition {
+    /// Create a new TopicPartition by copying the provided values.
+    pub fn new_from(topic: &str, id: i32) -> TopicPartition {
+        TopicPartition {
+            topic: String::from(topic),
+            id,
+            watermarks: (0, 0),
+            bytes: 0,
+        }
+    }
+}
+
 /// Represents information about a Topic in Redpanda.
 pub struct Topic {
     pub topic: String,

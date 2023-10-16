@@ -9,6 +9,7 @@ edition = "2021"
 apache-avro = { version = "0.16.0", features = ["snappy", "zstd"] }
 arrow = { version = "47.0.0"}
 arrow-flight = { version = "47.0.0", features = ["tls"] }
+async-stream = "0.3.5"
 futures = "0.3.28"
 log = "0.4.20"
 rdkafka = { version = "0.34.0", features = ["sasl", "ssl", "libz", "zstd"] }

@@ -1,15 +1,30 @@
+use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
+use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
+use async_stream::stream;
+use futures::stream;
 use futures::stream::{BoxStream, StreamExt};
+use rdkafka::message::OwnedMessage;
+use std::num::ParseIntError;
+use std::str::FromStr;
+use std::string::FromUtf8Error;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{error, warn};
 
 use crate::redpanda::{BatchingStream, Redpanda, Topic, TopicPartition};
 use crate::registry::Registry;
+use crate::schema::Schema;
+
+/// Used to join a topic name and a partition id to form a ticket. By choice, this separator
+/// contains value(s) not valid for Apache Kafka Topics.
+const TICKET_SEPARATOR: &str = "/";
 
 pub struct RedpandaFlightService {
     pub redpanda: Redpanda,
@@ -78,7 +93,7 @@ impl FlightService for RedpandaFlightService {
                                 .with_location("grpc+tcp://localhost:9999")
                                 .with_ticket(Ticket::new(String::from_iter([
                                     t.topic.clone().as_str(),
-                                    "/",
+                                    TICKET_SEPARATOR,
                                     tp.id.to_string().as_str(),
                                 ]))),
                         )
@@ -132,25 +147,92 @@ impl FlightService for RedpandaFlightService {
 
     async fn do_get(
         &self,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        warn!("do_get not implemented");
+        // Decompose ticket
+        // N.b. Apache Kafka topics are ascii.
+        // See Apache Kafka's clients/src/main/java/org/apache/kafka/common/internals/Topic.java
+        let ticket = request.into_inner().ticket;
+        if !ticket.is_ascii() {
+            return Err(Status::failed_precondition(String::from(
+                "redpanda-flight tickets must be ascii",
+            )));
+        }
+        if !ticket.contains(
+            TICKET_SEPARATOR
+                .as_bytes()
+                .first()
+                .expect("ticket separator does not contain ascii??!"),
+        ) {
+            return Err(Status::failed_precondition(String::from(
+                "unintelligible redpanda-flight ticket",
+            )));
+        }
 
-        let tp = TopicPartition {
-            topic: "".to_string(),
-            id: 0,
-            watermarks: (0, 0),
-            bytes: 0,
+        let parts: Vec<String> = ticket
+            .rsplitn(2, |c| c.to_string() == TICKET_SEPARATOR)
+            .map(|part| {
+                String::from_utf8(Vec::from(part))
+                    .expect("non utf-8 char in ticket even though we checked is_ascii?!")
+            })
+            .collect();
+        if parts.len() != 2 {
+            return Err(Status::internal("something went wrong in ticket parsing"));
+        }
+        let topic = match parts.first() {
+            None => {
+                return Err(Status::failed_precondition(
+                    "bad topic in redpanda-flight ticket",
+                ))
+            }
+            Some(t) => t,
         };
-        let stream = match self.redpanda.stream(&tp).await {
+        let pid = match i32::from_str(parts.last().unwrap_or(&String::from("")).as_str()) {
+            Ok(pid) => pid,
+            Err(e) => {
+                return Err(Status::failed_precondition(
+                    "partition id in ticket must be numeric",
+                ))
+            }
+        };
+
+        let schema = match self.registry.lookup(topic.as_str()).await {
+            None => return Err(Status::not_found("no matching schema found")),
+            Some(s) => s,
+        };
+
+        // TODO: do we need a cache of watermarks? or just do another lookup via the kafka api?
+        let tp = TopicPartition::new_from(topic.as_str(), pid);
+
+        let batches = match self.redpanda.stream(&tp).await {
             Ok(s) => s,
             Err(e) => {
                 error!("failed to create stream for {:?}", tp);
                 return Err(Status::internal(e));
             }
         };
-        stream.next_batch().await.unwrap();
-        Err(Status::unimplemented("Implement do_get"))
+        // TODO: we need to build and return an actual stream lest we block!
+        let mut results: Vec<RecordBatch> = Vec::new();
+        loop {
+            // Consume data for now, but drop it.
+            match batches.next_batch().await {
+                Ok(b) => {
+                    if b.is_empty() {
+                        break;
+                    }
+                }
+                Err(e) => return Err(Status::internal(e)),
+            };
+            let rb = RecordBatch::new_empty(SchemaRef::new(schema.schema_arrow.clone()));
+            results.push(rb);
+        }
+        let flight_data = match batches_to_flight_data(&schema.schema_arrow, results) {
+            Ok(data) => data,
+            Err(e) => return Err(Status::internal(e.to_string())),
+        }
+        .into_iter()
+        .map(Ok);
+        Ok(Response::new(Box::pin(stream::iter(flight_data))))
     }
 
     type DoPutStream = BoxStream<'static, Result<PutResult, Status>>;

@@ -1470,6 +1470,7 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-flight",
+ "async-stream",
  "futures",
  "log",
  "rdkafka",
