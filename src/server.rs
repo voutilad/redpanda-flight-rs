@@ -12,7 +12,7 @@ use arrow_flight::{
 use futures::stream;
 use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::redpanda::{Redpanda, Topic, TopicPartition};
 use crate::registry::Registry;
@@ -173,7 +173,7 @@ impl FlightService for RedpandaFlightService {
             .rposition(|c| c == TICKET_SEPARATOR_BYTE)
             .unwrap_or(0);
         let parts = ticket.split_at(idx);
-        info!("parsing ticket: {:?}", parts);
+        debug!("parsing ticket bytes: {:?}", parts);
 
         let topic = match String::from_utf8(parts.0.to_vec()) {
             Err(e) => {
@@ -184,7 +184,14 @@ impl FlightService for RedpandaFlightService {
             }
             Ok(t) => t,
         };
-        let pid = match String::from_utf8(parts.1.to_vec()) {
+        if parts.1.len() < 2 {
+            // First byte should be b'/', subsequent should be the digits
+            warn!("problem parsing partition id: does not look to contain separator and digits");
+            return Err(Status::failed_precondition(
+                "invalid partition id in redpanda-flight ticket",
+            ));
+        }
+        let pid = match String::from_utf8(parts.1.split_at(1).1.to_vec()) {
             Ok(s) => match i32::from_str(s.as_str()) {
                 Ok(pid) => pid,
                 Err(e) => {
@@ -241,6 +248,8 @@ impl FlightService for RedpandaFlightService {
         }
         .into_iter()
         .map(Ok);
+
+        info!("responding to do_get for topic partition {}/{}", topic, pid);
         Ok(Response::new(Box::pin(stream::iter(flight_data))))
     }
 
