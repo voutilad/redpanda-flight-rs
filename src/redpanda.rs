@@ -64,17 +64,31 @@ pub struct BatchingStream {
     consumer: StreamConsumer<RedpandaContext>,
 
     /// A simple identifier for this stream, for now.
-    _id: usize,
+    stream_id: usize,
+
+    last_offset: i64,
 }
 
 impl BatchingStream {
     /// Consume the next n items.
-    pub async fn next_batch(&self) -> Result<Vec<OwnedMessage>, String> {
+    pub async fn next_batch(&self) -> Result<Option<Vec<OwnedMessage>>, String> {
+        // Most likely reason to bail early is we're past our expected watermark.
+        if self.last_offset >= self.target_watermark {
+            debug!("stream {} consumed; past watermark", self.stream_id);
+            return Ok(None);
+        }
+
+        // There's a chance we hit our expected limit. Not guaranteed, though.
+        if self.remainder.load(Ordering::Relaxed) == 0 {
+            debug!("stream {} consumed; no messages remaining", self.stream_id);
+            return Ok(None);
+        }
+
         let mut v: Vec<OwnedMessage> = Vec::with_capacity(self.batch_size);
         let mut stream = self.consumer.stream();
         loop {
             let msg = match stream.next().await {
-                None => break,
+                None => return Ok(None),
                 Some(r) => match r {
                     Ok(m) => m.detach(),
                     Err(e) => {
@@ -96,7 +110,7 @@ impl BatchingStream {
             }
         }
 
-        Ok(v)
+        Ok(Some(v))
     }
 }
 
@@ -226,7 +240,8 @@ impl Redpanda {
             target_watermark: tp.watermarks.1,
             _permit: permit,
             consumer,
-            _id: stream_id,
+            stream_id,
+            last_offset: 0,
         })
     }
 }

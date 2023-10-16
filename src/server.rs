@@ -233,7 +233,11 @@ impl FlightService for RedpandaFlightService {
             // Consume data for now, but drop it.
             match batches.next_batch().await {
                 Ok(b) => {
-                    if b.is_empty() {
+                    if b.is_none() || b.unwrap().is_empty() {
+                        debug!(
+                            "end of stream for topic partition {}/{} detected",
+                            topic, pid
+                        );
                         break;
                     }
                 }
