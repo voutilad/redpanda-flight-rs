@@ -88,7 +88,7 @@ impl BatchingStream {
             debug!("added message with offset {}", offset);
 
             self.remainder.fetch_sub(1, Ordering::Relaxed);
-            if offset == self.target_watermark {
+            if offset >= self.target_watermark {
                 break;
             }
             if v.len() == self.batch_size {
