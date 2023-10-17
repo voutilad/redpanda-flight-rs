@@ -154,6 +154,7 @@ impl Redpanda {
         }
     }
 
+    /// List details on all [Topics](redpanda::Topic) for a Redpanda cluster.
     pub async fn list_topics(&self) -> Result<Vec<Topic>, String> {
         // XXX Bit of a TOCTOU here getting topics and then getting watermarks.
         let metadata = match self.fetch_metadata(None).await {
@@ -162,7 +163,7 @@ impl Redpanda {
         };
         let mut topics: Vec<Topic> = Vec::new();
 
-        // Build Copy-able state to navigate asyncifying the sync stuff.
+        // Build Copy-able state to make async the sync stuff in a simple way without a Pin nightmare.
         let pairs: Vec<(String, Vec<i32>)> = metadata
             .topics()
             .iter()
@@ -200,6 +201,7 @@ impl Redpanda {
         Ok(topics)
     }
 
+    /// Fetch metadata for a topic or topics (if None specified). Used to get partition information.
     pub async fn fetch_metadata(&self, topics: Option<&str>) -> Result<Metadata, String> {
         // Do a silly async dance...
         let s = String::from(topics.unwrap_or(""));
@@ -229,6 +231,7 @@ impl Redpanda {
         }
     }
 
+    /// Asynchronously fetch the watermark information (low, high) for a topic partition.
     pub async fn fetch_watermarks(&self, topic: &str, pid: i32) -> Result<(i64, i64), String> {
         // Do a silly async dance...
         let _client = self.metadata_client.clone();
@@ -303,7 +306,7 @@ impl Redpanda {
         })
     }
 
-    /// Generate a bounded stream from a topic partition.
+    /// Generate a bounded [BatchingStream] from a [TopicPartition].
     pub async fn stream(&self, tp: &TopicPartition) -> Result<BatchingStream, String> {
         let permit = match self.stream_permits.clone().acquire_owned().await {
             Ok(p) => p,
