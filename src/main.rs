@@ -5,6 +5,7 @@ use tonic::transport::Server;
 use tracing::info;
 use tracing_subscriber;
 
+mod convert;
 mod redpanda;
 mod registry;
 mod schema;
@@ -23,10 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "127.0.0.1:9999".parse().unwrap();
     info!("starting with address {}", addr);
 
-    let svc = FlightServiceServer::new(server::RedpandaFlightService::new(
-        seeds.as_str(),
-        topic.as_str(),
-    ));
+    let rp_flight = server::RedpandaFlightService::new(seeds.as_str(), topic.as_str())
+        .await
+        .unwrap();
+    let svc = FlightServiceServer::new(rp_flight);
+
     Server::builder().add_service(svc).serve(addr).await?;
 
     info!("bye!");

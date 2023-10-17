@@ -6,12 +6,14 @@ use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::schema::{RedpandaSchema, Schema};
 
 struct RegistryContext;
+
 impl ClientContext for RegistryContext {}
+
 impl ConsumerContext for RegistryContext {}
 
 /// A client for interacting with the Redpanda Schema Registry via the internal topic (i.e. via the Kafka API).
@@ -33,7 +35,10 @@ impl Registry {
         let consumer: StreamConsumer<RegistryContext> =
             match base_config.create_with_context(RegistryContext {}) {
                 Ok(c) => c,
-                Err(e) => return Err(e.to_string()),
+                Err(e) => {
+                    error!("failed to create a Registry consumer: {}", e);
+                    return Err(e.to_string());
+                }
             };
 
         // TODO: The StreamConsumer isn't async. Need to revisit this.

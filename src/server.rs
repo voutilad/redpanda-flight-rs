@@ -29,12 +29,26 @@ pub struct RedpandaFlightService {
 }
 
 impl RedpandaFlightService {
-    pub fn new(seeds: &str, schemas_topic: &str) -> RedpandaFlightService {
-        RedpandaFlightService {
-            redpanda: Redpanda::connect(seeds).unwrap(),
-            registry: Registry::new(schemas_topic, seeds).unwrap(),
+    pub async fn new(seeds: &str, schemas_topic: &str) -> Result<RedpandaFlightService, String> {
+        let redpanda = match Redpanda::connect(seeds).await {
+            Ok(r) => r,
+            Err(e) => {
+                error!("failed to create Redpanda service: {}", e);
+                return Err(e);
+            }
+        };
+        let registry = match Registry::new(schemas_topic, seeds) {
+            Ok(r) => r,
+            Err(e) => {
+                error!("failed to create Registry service: {}", e);
+                return Err(e);
+            }
+        };
+        Ok(RedpandaFlightService {
+            redpanda,
+            registry,
             seeds: String::from(seeds),
-        }
+        })
     }
 }
 
@@ -55,7 +69,7 @@ impl FlightService for RedpandaFlightService {
     ) -> Result<Response<Self::ListFlightsStream>, Status> {
         // let vec: Vec<Result<FlightInfo, Status>> = Vec::new();
 
-        let topics: Vec<Topic> = match self.redpanda.list_topics() {
+        let topics: Vec<Topic> = match self.redpanda.list_topics().await {
             Ok(v) => v,
             Err(e) => return Err(Status::internal(e)), // XXX fail hard for now
         };
@@ -218,7 +232,7 @@ impl FlightService for RedpandaFlightService {
         };
 
         // TODO: do we need a cache of watermarks? or just do another lookup via the kafka api?
-        let tp = match self.redpanda.get_topic_partition(topic.as_str(), pid) {
+        let tp = match self.redpanda.get_topic_partition(topic.as_str(), pid).await {
             Ok(tp) => tp,
             Err(e) => {
                 error!(

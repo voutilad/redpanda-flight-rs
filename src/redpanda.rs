@@ -6,13 +6,17 @@ use futures::StreamExt;
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::message::OwnedMessage;
+use rdkafka::metadata::Metadata;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::task;
 use tracing::{debug, error, info};
 
 struct RedpandaContext;
+
 impl ClientContext for RedpandaContext {}
+
 impl ConsumerContext for RedpandaContext {}
 
 const DEFAULT_BATCH_SIZE: usize = 100;
@@ -105,13 +109,13 @@ impl BatchingStream {
 /// Redpanda service abstraction.
 pub struct Redpanda {
     pub seeds: String,
-    metadata_client: BaseConsumer<RedpandaContext>,
+    metadata_client: Arc<BaseConsumer<RedpandaContext>>,
     stream_permits: Arc<Semaphore>,
 }
 
 impl Redpanda {
     /// Initialize a Redpanda connection, establishing the metadata client.
-    pub fn connect(seeds: &str) -> Result<Redpanda, String> {
+    pub async fn connect(seeds: &str) -> Result<Redpanda, String> {
         let base_config: ClientConfig = ClientConfig::new()
             .set("bootstrap.servers", seeds)
             .set_log_level(RDKafkaLogLevel::Warning)
@@ -122,74 +126,148 @@ impl Redpanda {
                 Err(e) => return Err(e.to_string()),
             };
 
-        // TODO: The BaseConsumer isn't async. Need to revisit this.
         // Fetch the cluster id to check our connection.
-        match metadata_client
-            .client()
-            .fetch_cluster_id(Timeout::After(Duration::from_millis(5000)))
-        {
-            None => Err(String::from("timed out connecting to Redpanda")),
-            Some(id) => {
-                info!("connected to Redpanda cluster {}", id);
-                Ok(Redpanda {
-                    seeds: String::from(seeds),
-                    metadata_client,
-                    stream_permits: Arc::new(Semaphore::new(10)), // TODO: arbitrary
-                })
+        let _seeds = String::from(seeds);
+        let result = task::spawn_blocking(move || {
+            match metadata_client
+                .client()
+                .fetch_cluster_id(Timeout::After(Duration::from_millis(5000)))
+            {
+                None => Err(String::from("timed out connecting to Redpanda")),
+                Some(id) => {
+                    info!("connected to Redpanda cluster {}", id);
+                    Ok(Redpanda {
+                        seeds: _seeds,
+                        metadata_client: Arc::new(metadata_client),
+                        stream_permits: Arc::new(Semaphore::new(10)), // TODO: arbitrary
+                    })
+                }
+            }
+        })
+        .await;
+        match result {
+            Ok(r) => r,
+            Err(e) => {
+                error!("failed to connect to Redpanda cluster");
+                return Err(e.to_string());
             }
         }
     }
 
-    pub fn list_topics(&self) -> Result<Vec<Topic>, String> {
+    pub async fn list_topics(&self) -> Result<Vec<Topic>, String> {
         // XXX Bit of a TOCTOU here getting topics and then getting watermarks.
-        let metadata = match self
-            .metadata_client
-            .fetch_metadata(None, Timeout::After(Duration::from_secs(5)))
-        {
+        let metadata = match self.fetch_metadata(None).await {
             Ok(m) => m,
             Err(e) => return Err(e.to_string()),
         };
-        let result: Vec<Topic> = metadata
+        let mut topics: Vec<Topic> = Vec::new();
+
+        // Build Copy-able state to navigate asyncifying the sync stuff.
+        let pairs: Vec<(String, Vec<i32>)> = metadata
             .topics()
             .iter()
-            .map(|topic| {
-                let name = topic.name();
-                let partitions: Vec<TopicPartition> = topic
-                    .partitions()
-                    .iter()
-                    .map(|p| {
-                        // XXX TODO: this call is blocking
-                        let (low, high) = self
-                            .metadata_client
-                            .fetch_watermarks(name, p.id(), Timeout::After(Duration::from_secs(5)))
-                            .unwrap_or((0, 0));
-                        TopicPartition {
-                            topic: String::from(name),
-                            id: p.id(),
-                            watermarks: (low, high),
-                            bytes: 0, // TODO: need to use that api call for log dir size
-                        }
-                    })
-                    .collect();
-                Topic {
-                    topic: String::from(name),
-                    partitions,
-                }
+            .map(|t| {
+                let topic = String::from(t.name());
+                let pids = t.partitions().iter().map(|p| p.id()).collect();
+                (topic, pids)
             })
             .collect();
-        Ok(result)
+
+        for (t, pids) in pairs {
+            let mut tps: Vec<TopicPartition> = Vec::new();
+
+            for pid in pids {
+                let watermarks = match self.fetch_watermarks(t.as_str(), pid).await {
+                    Ok(w) => w,
+                    Err(e) => {
+                        error!("failed to list topics: {}", e);
+                        return Err(e);
+                    }
+                };
+                tps.push(TopicPartition {
+                    topic: t.clone(),
+                    id: pid,
+                    watermarks,
+                    bytes: 0, // XXX TODO: needs an extra api call to get bytes
+                });
+            }
+            topics.push(Topic {
+                topic: String::from(t.clone()),
+                partitions: tps,
+            });
+        }
+
+        Ok(topics)
+    }
+
+    pub async fn fetch_metadata(&self, topics: Option<&str>) -> Result<Metadata, String> {
+        // Do a silly async dance...
+        let s = String::from(topics.unwrap_or(""));
+        let _client = self.metadata_client.clone();
+
+        match task::spawn_blocking(move || {
+            // ...continue the silly async dance.
+            let _s = s.clone();
+            let _topics: Option<&str>;
+            if _s.is_empty() {
+                _topics = None;
+            } else {
+                _topics = Some(_s.as_str());
+            }
+            match _client.fetch_metadata(_topics, Timeout::After(Duration::from_secs(5))) {
+                Ok(m) => Ok(m),
+                Err(e) => Err(e.to_string()),
+            }
+        })
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                error!("failed to fetch metadata: {}", e.to_string());
+                return Err(e.to_string());
+            }
+        }
+    }
+
+    pub async fn fetch_watermarks(&self, topic: &str, pid: i32) -> Result<(i64, i64), String> {
+        // Do a silly async dance...
+        let _client = self.metadata_client.clone();
+        let _topic = String::from(topic);
+
+        match task::spawn_blocking(move || {
+            match _client.fetch_watermarks(
+                _topic.as_str(),
+                pid,
+                Timeout::After(Duration::from_secs(5)),
+            ) {
+                Ok(w) => Ok(w),
+                Err(e) => Err(e.to_string()),
+            }
+        })
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => Err(String::from(format!(
+                "failed to fetch watermarks for topic partition {}/{}: {}",
+                topic,
+                pid,
+                e.to_string()
+            ))),
+        }
     }
 
     /// Fetch information on a particular topic partition (i.e. watermarks).
-    pub fn get_topic_partition(&self, topic: &str, pid: i32) -> Result<TopicPartition, String> {
-        // XXX TODO: this is blocking!
-        let metadata = match self
-            .metadata_client
-            .fetch_metadata(Some(topic), Timeout::After(Duration::from_secs(5)))
-        {
+    pub async fn get_topic_partition(
+        &self,
+        topic: &str,
+        pid: i32,
+    ) -> Result<TopicPartition, String> {
+        let metadata = match self.fetch_metadata(Some(topic)).await {
             Ok(m) => m,
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e),
         };
+
+        // Validate metadata and find our partition by id.
         if metadata.topics().len() != 1 {
             error!(
                 "bad metadata response, expected 1 topic but got {}",
@@ -197,37 +275,32 @@ impl Redpanda {
             );
             return Err(String::from("unexpected metadata response"));
         }
-        let topic_meta = metadata.topics().first().unwrap();
-        let partition = match topic_meta.partitions().iter().find(|&p| p.id() == pid) {
+        match metadata
+            .topics()
+            .first()
+            .unwrap()
+            .partitions()
+            .iter()
+            .find(|&p| p.id() == pid)
+        {
             None => {
                 error!("failed to find partition {} for topic {}", pid, topic);
                 return Err(String::from("cannot find partition for topic"));
             }
             Some(p) => p,
         };
-        // XXX TODO: this is blocking?!
-        let watermarks = match self.metadata_client.fetch_watermarks(
-            topic,
-            pid,
-            Timeout::After(Duration::from_secs(5)),
-        ) {
+
+        let watermarks = match self.fetch_watermarks(topic, pid).await {
             Ok(w) => w,
-            Err(e) => {
-                error!(
-                    "failed to fetch watermarks for partition {} of topic {}",
-                    pid, topic
-                );
-                return Err(e.to_string());
-            }
+            Err(e) => return Err(e),
         };
 
-        let result = TopicPartition {
+        Ok(TopicPartition {
             topic: String::from(topic),
-            id: partition.id(),
+            id: pid,
             watermarks,
             bytes: 0,
-        };
-        Ok(result)
+        })
     }
 
     /// Generate a bounded stream from a topic partition.

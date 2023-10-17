@@ -12,7 +12,8 @@ pub struct Schema {
     pub topic: String,
     pub id: i64,
     pub version: i64,
-    schema_avro: avro_schema::RecordSchema,
+    pub record_schema: avro_schema::RecordSchema,
+    pub schema_avro: avro_schema::Schema,
     pub schema_arrow: arrow_datatypes::Schema,
 }
 
@@ -66,7 +67,9 @@ fn avro_to_arrow_types(schema: &avro_schema::Schema) -> Result<arrow_datatypes::
 }
 
 /// Convert a given Apache Avro [RecordSchema](avro_schema::RecordSchema) to an approximate Apache Arrow [Schema](arrow_datatypes::Schema).
-fn avro_to_arrow(avro: &avro_schema::RecordSchema) -> Result<arrow_datatypes::Schema, String> {
+fn avro_to_arrow_schema(
+    avro: &avro_schema::RecordSchema,
+) -> Result<arrow_datatypes::Schema, String> {
     let fields: Vec<arrow_datatypes::Field> = avro
         .fields
         .iter()
@@ -89,14 +92,15 @@ impl Schema {
             avro_schema::Schema::Record(r) => r,
             _ => return Err(String::from("not a record schema")),
         };
-        let arrow = avro_to_arrow(&record).unwrap();
+        let arrow = avro_to_arrow_schema(&record).unwrap();
         let topic = String::from(value.subject.trim_end_matches("-value"));
         Ok(Schema {
             topic,
             id: value.id as i64,
             version: value.version as i64,
-            schema_avro: record,
+            record_schema: record.clone(),
             schema_arrow: arrow,
+            schema_avro: avro_schema::Schema::Record(record.clone()),
         })
     }
 }
@@ -108,7 +112,7 @@ mod tests {
     static SAMPLE_SCHEMA: &str = include_str!("fixtures/sample_value_schema.json");
 
     #[test]
-    fn can_convert_avro_to_arrow() {
+    fn can_convert_avro_schema_to_arrow_schema() {
         let input = RedpandaSchema {
             subject: String::from("sensor-value"),
             version: 1,
@@ -116,7 +120,7 @@ mod tests {
             schema: String::from(SAMPLE_SCHEMA),
         };
         let schema = Schema::from(&input).unwrap();
-        let avro = schema.schema_avro;
+        let avro = schema.record_schema;
         let arrow = schema.schema_arrow;
         assert_eq!(3, avro.fields.len(), "should have 3 Avro fields");
         assert_eq!(3, arrow.fields.len(), "should have 3 Arrow fields");
