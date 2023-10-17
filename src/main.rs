@@ -2,7 +2,7 @@ use std::env;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber;
 
 mod convert;
@@ -12,7 +12,7 @@ mod schema;
 mod server;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     if env::var("RUST_LOG").is_err() {
         env::set_var("RUST_LOG", "info");
     }
@@ -24,13 +24,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "127.0.0.1:9999".parse().unwrap();
     info!("starting with address {}", addr);
 
-    let rp_flight = server::RedpandaFlightService::new(seeds.as_str(), topic.as_str())
-        .await
-        .unwrap();
-    let svc = FlightServiceServer::new(rp_flight);
+    let redpanda = match server::RedpandaFlightService::new(seeds.as_str(), topic.as_str()).await {
+        Ok(r) => r,
+        Err(e) => {
+            error!("failure to launch: {}", e);
+            return;
+        }
+    };
+    let svc = FlightServiceServer::new(redpanda);
 
-    Server::builder().add_service(svc).serve(addr).await?;
+    match Server::builder().add_service(svc).serve(addr).await {
+        Ok(_) => {}
+        Err(e) => {
+            error!("failure to start flight service: {}", e);
+            return;
+        }
+    };
 
     info!("bye!");
-    Ok(())
 }
