@@ -6,6 +6,7 @@ use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::RwLock;
+use tokio::task;
 use tracing::{error, info};
 
 use crate::schema::{RedpandaSchema, Schema};
@@ -24,7 +25,7 @@ pub struct Registry {
 
 impl Registry {
     /// Create a new Registry instance.
-    pub fn new(topic: &str, seeds: &str) -> Result<Registry, String> {
+    pub async fn new(topic: &str, seeds: &str) -> Result<Registry, String> {
         let base_config: ClientConfig = ClientConfig::new()
             .set("group.id", "redpanda-flight-registry")
             .set("bootstrap.servers", seeds)
@@ -32,29 +33,56 @@ impl Registry {
             .set("enable.auto.commit", "true")
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
-        let consumer: StreamConsumer<RegistryContext> =
-            match base_config.create_with_context(RegistryContext {}) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("failed to create a Registry consumer: {}", e);
-                    return Err(e.to_string());
-                }
-            };
 
         // We don't use subscription mode as that creates consumer group behavior.
         let mut tpl = TopicPartitionList::new();
         tpl.add_partition(topic, 0);
         tpl.set_partition_offset(topic, 0, Offset::Beginning)
             .unwrap();
-        if consumer.assign(&tpl).is_err() {
-            return Err(String::from("failed to assign topic partition to consumer"));
-        }
+
+        // Create our consumer by spawning a blocking task. The initial partition assignment
+        // can cause a Kafka API request to a broker, so it's considered blocking.
+        //
+        let future = task::spawn_blocking(move || {
+            let consumer: StreamConsumer<RegistryContext> =
+                match base_config.create_with_context(RegistryContext {}) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("failed to create a Registry consumer: {}", e);
+                        return None;
+                    }
+                };
+
+            // XXX This is the blocking call.
+            match consumer.assign(&tpl) {
+                Ok(_) => Some(consumer),
+                Err(e) => {
+                    error!("error assigning TopicPartitionList {:?}: {}", tpl, e);
+                    return None;
+                }
+            }
+        })
+        .await;
+
+        let consumer = match future {
+            Ok(c) => match c {
+                None => return Err(String::from("failed to create consumer")),
+                Some(c) => c,
+            },
+            Err(e) => {
+                return Err(String::from(format!(
+                    "unexpected failure creating consumer: {}",
+                    e
+                )));
+            }
+        };
 
         let map = Arc::new(RwLock::new(HashMap::new()));
         let registry = Registry {
             topic: String::from(topic),
             map: map.clone(),
         };
+
         tokio::spawn(async move { Registry::hydrate(consumer, map).await });
         Ok(registry)
     }

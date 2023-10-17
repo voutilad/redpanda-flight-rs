@@ -37,7 +37,7 @@ impl RedpandaFlightService {
                 return Err(e);
             }
         };
-        let registry = match Registry::new(schemas_topic, seeds) {
+        let registry = match Registry::new(schemas_topic, seeds).await {
             Ok(r) => r,
             Err(e) => {
                 error!("failed to create Registry service: {}", e);

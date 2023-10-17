@@ -24,7 +24,7 @@ static STREAM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Represents information about a Topic-Partition in Redpanda.
 /// N.b. some of these types are signed because of RDKafka & Java :(
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TopicPartition {
     /// Name of the topic.
     pub topic: String,
@@ -321,27 +321,44 @@ impl Redpanda {
             .set("group.id", format!("redpanda-flight-stream-{}", stream_id))
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
-        let consumer: StreamConsumer<RedpandaContext> =
-            match base_config.create_with_context(RedpandaContext {}) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("error creating StreamConsumer: {}", e);
-                    return Err(e.to_string());
-                }
-            };
 
-        // TODO: this is blocking...needs asyncification
-        // Assign a topic partition to this consumer.
         let mut tpl = TopicPartitionList::new();
         tpl.add_partition(tp.topic.as_str(), tp.id);
         tpl.set_partition_offset(tp.topic.as_str(), tp.id, Offset::Beginning)
             .unwrap();
-        match consumer.assign(&tpl) {
-            Ok(_) => {}
-            Err(e) => {
-                error!("error assigning TopicPartitionList {:?}", tpl);
-                return Err(e.to_string());
+
+        // TODO: this is blocking...needs asyncification
+        // Assign a topic partition to this consumer.
+
+        // Create our consumer by spawning a blocking task. The initial partition assignment
+        // can cause a Kafka API request to a broker, so it's considered blocking.
+        //
+        let future = task::spawn_blocking(move || {
+            let consumer: StreamConsumer<RedpandaContext> =
+                match base_config.create_with_context(RedpandaContext {}) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("error creating StreamConsumer: {}", e);
+                        return None;
+                    }
+                };
+
+            // XXX This is the blocking call.
+            match consumer.assign(&tpl) {
+                Ok(_) => Some(consumer),
+                Err(e) => {
+                    error!("error assigning TopicPartitionList {:?}: {}", tpl, e);
+                    return None;
+                }
             }
+        })
+        .await;
+        let consumer = match future {
+            Ok(c) => match c {
+                None => return Err(String::from("failed to create consumer")),
+                Some(c) => c,
+            },
+            Err(_) => return Err(String::from("unexpected error creating consumer")),
         };
 
         debug!(

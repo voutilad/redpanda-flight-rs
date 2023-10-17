@@ -14,7 +14,7 @@ use crate::schema::Schema;
 
 /// Convert data to Arrow RecordBatches.
 /// N.b. this is CPU bound. Might need offloading via [tokio::spawn_blocking].
-pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBatch, String> {
+pub fn _convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBatch, String> {
     let fields = schema.schema_arrow.fields.to_vec();
 
     // Do some brute forcing here to sort our builders in Avro field order. This will allow
@@ -40,7 +40,7 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
             DataType::Utf8 => Box::new(StringBuilder::new()),     // Avro String
             // DataType::Union(_, _) => {},                 // TODO
             DataType::Date64 => Box::new(Date64Builder::new()), // Avro Date
-            DataType::Timestamp(time_unit, _) => Box::new(TimestampMillisecondBuilder::new()), // Avro TimestampMillis
+            DataType::Timestamp(_, _) => Box::new(TimestampMillisecondBuilder::new()), // Avro TimestampMillis
             _ => return Err(String::from("unsupported Arrow field type")),
         };
         builders.push(builder);
@@ -78,7 +78,7 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
             error!("bogus or multi-record value from payload");
             return Err(String::from("expected single-value payload"));
         }
-        let record = match values.first().unwrap() {
+        let _record = match values.first().unwrap() {
             Value::Record(r) => r,
             _ => {
                 error!("payload is not an avro record");
