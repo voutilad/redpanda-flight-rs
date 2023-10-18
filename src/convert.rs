@@ -19,6 +19,7 @@ use crate::schema::Schema;
 
 /// Convert data to Arrow RecordBatches.
 /// N.b. this is CPU bound. Might need offloading via [tokio::spawn_blocking].
+/// XXX there be dragons
 pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBatch, String> {
     let avro_schema = apache_avro::Schema::Record(schema.avro.clone());
     let fields = schema.arrow.fields.to_vec();
@@ -29,6 +30,7 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
     // N.b. we need an ordered list of builders, so we can't just use a map of field -> builder.
     let mut builders: Vec<Box<dyn ArrayBuilder>> = Vec::new();
     let mut builders_idx: HashMap<String, usize> = HashMap::new();
+    let mut builder_types: Vec<DataType> = Vec::new();
 
     for avro_field in schema.avro.fields.iter() {
         let f = fields.iter().find(|&f| f.name() == &avro_field.name);
@@ -53,6 +55,7 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
         };
         builders.push(builder);
         builders_idx.insert(f.unwrap().name().clone(), builders.len() - 1);
+        builder_types.push(f.unwrap().data_type().clone());
     }
 
     // Process each message.
@@ -106,10 +109,6 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
             let idx = builders_idx.get(field).unwrap();
             let builder = builders.get_mut(*idx).unwrap();
             match value {
-                Value::Null => {
-                    // TODO: we need to deal with looking up the builder and appending a null.
-                    todo!();
-                }
                 Value::Boolean(b) => {
                     builder
                         .as_any_mut()
@@ -176,8 +175,56 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
                 Value::Union(_, inner_value) => {
                     match inner_value.deref() {
                         Value::Null => {
-                            // TODO: we need to deal with looking up the builder and appending a null.
-                            todo!();
+                            // Fallback to schema to determine type.
+                            // Need to fallback to type hint vector.
+                            match builder_types.get(*idx).unwrap() {
+                                DataType::Boolean => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<BooleanBuilder>()
+                                    .unwrap()
+                                    .append_null(),
+                                DataType::Int32 => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<Int32Builder>()
+                                    .unwrap()
+                                    .append_null(),
+                                DataType::Int64 => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<Int64Builder>()
+                                    .unwrap()
+                                    .append_null(),
+                                DataType::Float32 => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<Float32Builder>()
+                                    .unwrap()
+                                    .append_null(),
+                                DataType::Float64 => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<Float64Builder>()
+                                    .unwrap()
+                                    .append_null(),
+                                DataType::Timestamp(_, _) => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<TimestampMillisecondBuilder>()
+                                    .unwrap()
+                                    .append_null(),
+                                DataType::Date64 => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<Date64Builder>()
+                                    .unwrap()
+                                    .append_null(),
+                                DataType::Binary => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<BinaryBuilder>()
+                                    .unwrap()
+                                    .append_null(),
+                                DataType::Utf8 => builder
+                                    .as_any_mut()
+                                    .downcast_mut::<StringBuilder>()
+                                    .unwrap()
+                                    .append_null(),
+                                _ => panic!("unimplemented type"),
+                            }
                         }
                         Value::Boolean(b) => {
                             builder
@@ -295,6 +342,14 @@ mod tests {
         writer.append(record2).unwrap();
         let payload2 = writer.into_inner().unwrap();
 
+        writer = apache_avro::Writer::new(&avro_schema, Vec::new());
+        let mut record3 = Record::new(&avro_schema).unwrap();
+        record3.put("timestamp", Value::TimestampMillis(1697643448668i64));
+        record3.put("identifier", Value::Uuid(uuid::Uuid::new_v4()));
+        record3.put("value", Union(0, Box::new(Value::Null)));
+        writer.append(record3).unwrap();
+        let payload3 = writer.into_inner().unwrap();
+
         let messages = vec![
             OwnedMessage::new(
                 Some(payload1),
@@ -314,6 +369,15 @@ mod tests {
                 1,
                 None,
             ),
+            OwnedMessage::new(
+                Some(payload3),
+                Some(String::from("key3").into_bytes()),
+                String::from("topic"),
+                Timestamp::CreateTime(1),
+                1,
+                1,
+                None,
+            ),
         ];
 
         let batch = convert(&messages, &schema).unwrap();
@@ -322,9 +386,9 @@ mod tests {
             batch.columns().len(),
             "should have 3 columns based on the schema json"
         );
-        assert_eq!(2, batch.num_rows(), "should have 2 rows");
+        assert_eq!(3, batch.num_rows(), "should have 3 rows");
         assert_eq!(
-            vec![1234, 5678],
+            vec![1234, 5678, 0], // XXX unclear what the docs mean by null values being "arbitrary"
             batch
                 .column_by_name("value")
                 .unwrap()
