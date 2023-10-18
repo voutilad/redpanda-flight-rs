@@ -1,8 +1,13 @@
+use std::any::Any;
+use std::collections::HashMap;
+use std::ops::Deref;
+
 use apache_avro::types::Value;
 use apache_avro::Reader;
 use arrow::array::{
-    ArrayBuilder, BinaryBuilder, BooleanBuilder, Date64Builder, Float32Builder, Float64Builder,
-    Int32Builder, Int64Builder, StringBuilder, TimestampMillisecondBuilder,
+    ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date64Builder, Float32Builder,
+    Float64Builder, Int32Builder, Int64Builder, NullBuilder, StringBuilder,
+    TimestampMillisecondBuilder,
 };
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
@@ -14,15 +19,18 @@ use crate::schema::Schema;
 
 /// Convert data to Arrow RecordBatches.
 /// N.b. this is CPU bound. Might need offloading via [tokio::spawn_blocking].
-pub fn _convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBatch, String> {
-    let fields = schema.schema_arrow.fields.to_vec();
+pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBatch, String> {
+    let avro_schema = apache_avro::Schema::Record(schema.avro.clone());
+    let fields = schema.arrow.fields.to_vec();
 
     // Do some brute forcing here to sort our builders in Avro field order. This will allow
     // indexing into the vectors during value conversion. This should probably be cached, but
     // not sure if we can guarantee the order each time.
-    //
+    // N.b. we need an ordered list of builders, so we can't just use a map of field -> builder.
     let mut builders: Vec<Box<dyn ArrayBuilder>> = Vec::new();
-    for avro_field in &schema.record_schema.fields {
+    let mut builders_idx: HashMap<String, usize> = HashMap::new();
+
+    for avro_field in schema.avro.fields.iter() {
         let f = fields.iter().find(|&f| f.name() == &avro_field.name);
         if f.is_none() {
             return Err(String::from(format!(
@@ -31,6 +39,7 @@ pub fn _convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordB
             )));
         }
         let builder: Box<dyn ArrayBuilder> = match f.unwrap().data_type() {
+            DataType::Null => Box::new(NullBuilder::new()),
             DataType::Boolean => Box::new(BooleanBuilder::new()), // Avro Boolean
             DataType::Int32 => Box::new(Int32Builder::new()),     // Avro int
             DataType::Int64 => Box::new(Int64Builder::new()),     // Avro long
@@ -38,12 +47,12 @@ pub fn _convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordB
             DataType::Float64 => Box::new(Float64Builder::new()), // Avro double
             DataType::Binary => Box::new(BinaryBuilder::new()),   // Avro binary
             DataType::Utf8 => Box::new(StringBuilder::new()),     // Avro String
-            // DataType::Union(_, _) => {},                 // TODO
-            DataType::Date64 => Box::new(Date64Builder::new()), // Avro Date
+            DataType::Date64 => Box::new(Date64Builder::new()),   // Avro Date
             DataType::Timestamp(_, _) => Box::new(TimestampMillisecondBuilder::new()), // Avro TimestampMillis
             _ => return Err(String::from("unsupported Arrow field type")),
         };
         builders.push(builder);
+        builders_idx.insert(f.unwrap().name().clone(), builders.len() - 1);
     }
 
     // Process each message.
@@ -57,7 +66,7 @@ pub fn _convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordB
             }
             Some(p) => p,
         };
-        let reader = match Reader::with_schema(&schema.schema_avro, payload) {
+        let reader = match Reader::with_schema(&avro_schema, payload) {
             Ok(r) => r,
             Err(e) => {
                 error!("error reading payload: {}", e);
@@ -66,19 +75,23 @@ pub fn _convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordB
         };
 
         // Decode the Record.
-        // XXX TODO: we assume each payload is a single avro record (i.e. a single row) for now.
-        let values = match reader.collect::<Result<Vec<Value>, _>>() {
-            Ok(v) => v,
-            Err(_) => {
-                error!("failed to read value from payload");
-                return Err(String::from("failed to read value from payload"));
-            }
-        };
+        // XXX TODO: we assume each payload is a single avro Record (i.e. a single row) for now.
+        let mut values: Vec<Value> = Vec::new();
+        for value in reader {
+            match value {
+                Ok(v) => values.push(v),
+                Err(e) => {
+                    error!("failed to read value from payload: {}", e);
+                    return Err(String::from("failed to read value from payload"));
+                }
+            };
+            break;
+        }
         if values.len() != 1 {
             error!("bogus or multi-record value from payload");
             return Err(String::from("expected single-value payload"));
         }
-        let _record = match values.first().unwrap() {
+        let record = match values.first().unwrap() {
             Value::Record(r) => r,
             _ => {
                 error!("payload is not an avro record");
@@ -88,6 +101,239 @@ pub fn _convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordB
 
         // Convert!
         //
+        for idx in 0..record.len() {
+            let (field, value) = record.get(idx).unwrap();
+            let idx = builders_idx.get(field).unwrap();
+            let builder = builders.get_mut(*idx).unwrap();
+            match value {
+                Value::Null => {
+                    // TODO: we need to deal with looking up the builder and appending a null.
+                    todo!();
+                }
+                Value::Boolean(b) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<BooleanBuilder>()
+                        .unwrap()
+                        .append_value(*b);
+                }
+                Value::Int(i) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<Int32Builder>()
+                        .unwrap()
+                        .append_value(*i);
+                }
+                Value::Long(l) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<Int64Builder>()
+                        .unwrap()
+                        .append_value(*l);
+                }
+                Value::Float(f) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<Float32Builder>()
+                        .unwrap()
+                        .append_value(*f);
+                }
+                Value::Double(d) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<Float64Builder>()
+                        .unwrap()
+                        .append_value(*d);
+                }
+                Value::Bytes(b) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<BinaryBuilder>()
+                        .unwrap()
+                        .append_value(b);
+                }
+                Value::String(s) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<StringBuilder>()
+                        .unwrap()
+                        .append_value(s.as_str());
+                }
+                Value::Uuid(u) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<StringBuilder>()
+                        .unwrap()
+                        .append_value(u.as_hyphenated().to_string().as_str()); // TODO: is this correct?
+                }
+                Value::TimestampMillis(ts) => {
+                    builder
+                        .as_any_mut()
+                        .downcast_mut::<TimestampMillisecondBuilder>()
+                        .unwrap()
+                        .append_value(*ts);
+                }
+                Value::Union(_, inner_value) => {
+                    match inner_value.deref() {
+                        Value::Null => {
+                            // TODO: we need to deal with looking up the builder and appending a null.
+                            todo!();
+                        }
+                        Value::Boolean(b) => {
+                            builder
+                                .as_any_mut()
+                                .downcast_mut::<BooleanBuilder>()
+                                .unwrap()
+                                .append_value(*b);
+                        }
+                        Value::Int(i) => {
+                            builder
+                                .as_any_mut()
+                                .downcast_mut::<Int32Builder>()
+                                .unwrap()
+                                .append_value(*i);
+                        }
+                        Value::Long(l) => {
+                            builder
+                                .as_any_mut()
+                                .downcast_mut::<Int64Builder>()
+                                .unwrap()
+                                .append_value(*l);
+                        }
+                        Value::Float(f) => {
+                            builder
+                                .as_any_mut()
+                                .downcast_mut::<Float32Builder>()
+                                .unwrap()
+                                .append_value(*f);
+                        }
+                        Value::Double(d) => {
+                            builder
+                                .as_any_mut()
+                                .downcast_mut::<Float64Builder>()
+                                .unwrap()
+                                .append_value(*d);
+                        }
+                        Value::Bytes(b) => {
+                            builder
+                                .as_any_mut()
+                                .downcast_mut::<BinaryBuilder>()
+                                .unwrap()
+                                .append_value(b);
+                        }
+                        Value::String(s) => {
+                            builder
+                                .as_any_mut()
+                                .downcast_mut::<StringBuilder>()
+                                .unwrap()
+                                .append_value(s.as_str());
+                        }
+                        Value::Uuid(u) => {
+                            builder
+                                .as_any_mut()
+                                .downcast_mut::<StringBuilder>()
+                                .unwrap()
+                                .append_value(u.as_hyphenated().to_string().as_str());
+                            // TODO: is this correct?
+                        }
+                        _ => panic!("unimplemented inner value type: {:?}", value.type_id()),
+                    }
+                }
+                _ => panic!("unimplemented value type: {:?}", value.type_id()),
+            }
+        } // Convert
     }
-    todo!();
+
+    // Finalize buffers and build the RecordBatch!
+    let cols: Vec<ArrayRef> = builders.iter_mut().map(|b| b.finish()).collect();
+    match RecordBatch::try_new(schema.arrow.clone(), cols) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            error!("failed to build record batch: {}", e);
+            return Err(e.to_string());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use apache_avro::types::Value::Union;
+    use apache_avro::types::{Record, Value};
+    use arrow::array::{Array, Int64Array};
+    use rdkafka::message::OwnedMessage;
+    use rdkafka::Timestamp;
+
+    use crate::convert::convert;
+    use crate::schema::{RedpandaSchema, Schema};
+
+    static SAMPLE_SCHEMA: &str = include_str!("fixtures/sample_value_schema.json");
+
+    #[test]
+    fn can_convert_avro_record_to_arrow_record_batch() {
+        let input = RedpandaSchema {
+            subject: String::from("sensor-value"),
+            version: 1,
+            id: 2,
+            schema: String::from(SAMPLE_SCHEMA),
+        };
+        let schema = Schema::from(&input).unwrap();
+        let avro_schema = apache_avro::Schema::Record(schema.avro.clone());
+        // encode some data
+        let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new());
+        let mut record1 = Record::new(&avro_schema).unwrap();
+        record1.put("timestamp", Value::TimestampMillis(1697643448668i64));
+        record1.put("identifier", Value::Uuid(uuid::Uuid::new_v4()));
+        record1.put("value", Union(1, Box::new(Value::Long(1234))));
+        writer.append(record1).unwrap();
+        let payload1 = writer.into_inner().unwrap();
+
+        writer = apache_avro::Writer::new(&avro_schema, Vec::new());
+        let mut record2 = Record::new(&avro_schema).unwrap();
+        record2.put("timestamp", Value::TimestampMillis(1697643448668i64));
+        record2.put("identifier", Value::Uuid(uuid::Uuid::new_v4()));
+        record2.put("value", Union(1, Box::new(Value::Long(5678))));
+        writer.append(record2).unwrap();
+        let payload2 = writer.into_inner().unwrap();
+
+        let messages = vec![
+            OwnedMessage::new(
+                Some(payload1),
+                Some(String::from("key1").into_bytes()),
+                String::from("topic"),
+                Timestamp::CreateTime(0),
+                1,
+                0,
+                None,
+            ),
+            OwnedMessage::new(
+                Some(payload2),
+                Some(String::from("key2").into_bytes()),
+                String::from("topic"),
+                Timestamp::CreateTime(1),
+                1,
+                1,
+                None,
+            ),
+        ];
+
+        let batch = convert(&messages, &schema).unwrap();
+        assert_eq!(
+            3,
+            batch.columns().len(),
+            "should have 3 columns based on the schema json"
+        );
+        assert_eq!(2, batch.num_rows(), "should have 2 rows");
+        assert_eq!(
+            vec![1234, 5678],
+            batch
+                .column_by_name("value")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+                .to_vec(),
+            "the 'value' field should contain the intended vector of numbers"
+        );
+    }
 }

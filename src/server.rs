@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::SchemaRef;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::utils::batches_to_flight_data;
@@ -86,7 +85,7 @@ impl FlightService for RedpandaFlightService {
             let desc = FlightDescriptor::new_path(vec![t.topic.clone()]);
 
             // TODO: tie into service Location
-            let result = match FlightInfo::new().try_with_schema(&schema.schema_arrow) {
+            let result = match FlightInfo::new().try_with_schema(&schema.arrow) {
                 Ok(mut info) => {
                     info = info
                         .with_descriptor(desc)
@@ -146,9 +145,7 @@ impl FlightService for RedpandaFlightService {
             None => return Err(Status::not_found("no schema for topic")),
             Some(s) => s,
         };
-        let info = FlightInfo::new()
-            .try_with_schema(&schema.schema_arrow)
-            .unwrap();
+        let info = FlightInfo::new().try_with_schema(&schema.arrow).unwrap();
         Ok(Response::new(SchemaResult {
             schema: info.schema,
         }))
@@ -265,10 +262,10 @@ impl FlightService for RedpandaFlightService {
                 }
                 Err(e) => return Err(Status::internal(e)),
             };
-            let rb = RecordBatch::new_empty(SchemaRef::new(schema.schema_arrow.clone()));
+            let rb = RecordBatch::new_empty(schema.arrow.clone());
             results.push(rb);
         }
-        let flight_data = match batches_to_flight_data(&schema.schema_arrow, results) {
+        let flight_data = match batches_to_flight_data(&schema.arrow, results) {
             Ok(data) => data,
             Err(e) => return Err(Status::internal(e.to_string())),
         }

@@ -19,3 +19,4 @@ tokio = { version = "1.33.0", features = ["macros", "rt", "rt-multi-thread"] }
 tonic = { version = "0.10.2", features = ["tls", "gzip"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
+uuid = { version = "1.4.1", features = ["v4"] }

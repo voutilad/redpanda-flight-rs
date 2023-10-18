@@ -1,8 +1,9 @@
+use std::collections::VecDeque;
 use std::string::String;
 
 use apache_avro::schema as avro_schema;
 use arrow::datatypes as arrow_datatypes;
-use arrow::datatypes::{TimeUnit, UnionMode};
+use arrow::datatypes::{SchemaRef, TimeUnit};
 use serde::Deserialize;
 use tracing::debug;
 
@@ -12,9 +13,8 @@ pub struct Schema {
     pub topic: String,
     pub id: i64,
     pub version: i64,
-    pub record_schema: avro_schema::RecordSchema,
-    pub schema_avro: avro_schema::Schema,
-    pub schema_arrow: arrow_datatypes::Schema,
+    pub avro: avro_schema::RecordSchema,
+    pub arrow: SchemaRef,
 }
 
 /// Represents an entry in the Redpanda Schema Registry as seen from the underlying topic.
@@ -45,22 +45,21 @@ fn avro_to_arrow_types(schema: &avro_schema::Schema) -> Result<arrow_datatypes::
             None,
         )),
         avro_schema::Schema::Union(u) => {
-            // XXX nesting probably breaks this?
-            let variants: Vec<arrow_datatypes::DataType> = u
-                .variants()
-                .iter()
-                .map(avro_to_arrow_types)
-                .map(|r| r.unwrap())
-                .collect();
-            let type_ids: Vec<i8> = (0..variants.len()).into_iter().map(|i| i as i8).collect();
-            let fields: Vec<arrow_datatypes::Field> = variants
-                .iter()
-                .map(|v| arrow_datatypes::Field::new(v.to_string(), v.clone(), u.is_nullable()))
-                .collect();
-            Ok(arrow_datatypes::DataType::Union(
-                arrow_datatypes::UnionFields::new(type_ids, fields),
-                UnionMode::Dense,
-            ))
+            // XXX TODO: for now we only support using Union as a means of letting a field be nullable.
+            let mut variants: VecDeque<avro_schema::Schema> =
+                VecDeque::from_iter(u.variants().iter().map(|s| s.clone()));
+            if variants.len() != 2 {
+                return Err(String::from(
+                    "Union fields are only supported for creating nullable values",
+                ));
+            }
+
+            // Should start with a Null type.
+            let variant = variants.pop_front().unwrap();
+            if variant == avro_schema::Schema::Null {
+                return avro_to_arrow_types(&variants.pop_front().unwrap());
+            }
+            return avro_to_arrow_types(&variant);
         }
         _ => Err(String::from("unsupported Avro schema type")),
     }
@@ -88,19 +87,18 @@ impl Schema {
     /// schema representation, and generating an analogous Apache Arrow representation.
     pub fn from(value: &RedpandaSchema) -> Result<Schema, String> {
         let avro = avro_schema::Schema::parse_str(value.schema.as_str()).unwrap();
-        let record = match avro {
+        let record_schema = match avro {
             avro_schema::Schema::Record(r) => r,
             _ => return Err(String::from("not a record schema")),
         };
-        let arrow = avro_to_arrow_schema(&record).unwrap();
+        let arrow = avro_to_arrow_schema(&record_schema).unwrap();
         let topic = String::from(value.subject.trim_end_matches("-value"));
         Ok(Schema {
             topic,
             id: value.id as i64,
             version: value.version as i64,
-            record_schema: record.clone(),
-            schema_arrow: arrow,
-            schema_avro: avro_schema::Schema::Record(record.clone()),
+            arrow: SchemaRef::new(arrow),
+            avro: record_schema,
         })
     }
 }
@@ -120,8 +118,8 @@ mod tests {
             schema: String::from(SAMPLE_SCHEMA),
         };
         let schema = Schema::from(&input).unwrap();
-        let avro = schema.record_schema;
-        let arrow = schema.schema_arrow;
+        let avro = schema.avro;
+        let arrow = schema.arrow;
         assert_eq!(3, avro.fields.len(), "should have 3 Avro fields");
         assert_eq!(3, arrow.fields.len(), "should have 3 Arrow fields");
         assert_eq!(
