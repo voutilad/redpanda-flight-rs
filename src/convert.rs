@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::ops::Deref;
 
 use apache_avro::types::Value;
-use apache_avro::Reader;
 use arrow::array::{
     ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date64Builder, Float32Builder,
     Float64Builder, Int32Builder, Int64Builder, NullBuilder, StringBuilder,
@@ -73,33 +72,8 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
         let mut values: Vec<Value> = Vec::new(); // XXX init for now even if erroring later.
 
         // TODO: Need to clean this up now that I understand the Schema Registry "framing".
-        if payload.starts_with(&[b'O', b'b', b'j', 1u8]) {
-            // We have a raw, native Avro record.
-
-            let reader = match Reader::with_schema(&avro_schema, payload) {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("error reading payload: {}", e);
-                    // return Err(e.to_string());
-                    continue;
-                }
-            };
-
-            // Decode the Record.
-            // XXX TODO: we assume each payload is a single avro Record (i.e. a single row) for now.
-
-            for value in reader {
-                match value {
-                    Ok(v) => values.push(v),
-                    Err(e) => {
-                        error!("failed to read value from raw Avro payload: {}", e);
-                        return Err(String::from("failed to read value from raw Avro payload"));
-                    }
-                };
-                break;
-            }
-        } else if payload.starts_with(&[0u8]) && payload.len() > 5 {
-            // The silly Schema Registry framing. We have a lower-level raw Avro datum.
+        if payload.starts_with(&[0u8]) && payload.len() > 5 {
+            // The silly Schema Registry framing. We have a lower-level raw Avro datum to process.
             // Fast-forward 5 bytes.
             let mut trimmed = &payload[5..];
             match apache_avro::from_avro_datum(&avro_schema, &mut trimmed, None) {
@@ -115,7 +89,7 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
                 }
             }
         } else {
-            panic!("crap data?");
+            panic!("crap data?"); // TODO: panic!
         }
         if values.len() != 1 {
             error!("bogus or multi-record value from payload");
@@ -352,30 +326,31 @@ mod tests {
         };
         let schema = Schema::from(&input).unwrap();
         let avro_schema = apache_avro::Schema::Record(schema.avro.clone());
-        // encode some data
-        let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new());
+
+        // Our lovely Confluent Schema Registry framing nonsense. /grr.
+        let base = vec![0u8, 0u8, 0u8, 0u8, 1u8];
+
+        // Encode some data. We need to use the low-level Avro datum format.
         let mut record1 = Record::new(&avro_schema).unwrap();
         record1.put("timestamp", Value::TimestampMillis(1697643448668i64));
         record1.put("identifier", Value::Uuid(uuid::Uuid::new_v4()));
         record1.put("value", Union(1, Box::new(Value::Long(1234))));
-        writer.append(record1).unwrap();
-        let payload1 = writer.into_inner().unwrap();
+        let mut payload1 = base.clone();
+        payload1.extend(apache_avro::to_avro_datum(&avro_schema, record1).unwrap());
 
-        writer = apache_avro::Writer::new(&avro_schema, Vec::new());
         let mut record2 = Record::new(&avro_schema).unwrap();
         record2.put("timestamp", Value::TimestampMillis(1697643448668i64));
         record2.put("identifier", Value::Uuid(uuid::Uuid::new_v4()));
         record2.put("value", Union(1, Box::new(Value::Long(5678))));
-        writer.append(record2).unwrap();
-        let payload2 = writer.into_inner().unwrap();
+        let mut payload2 = base.clone();
+        payload2.extend(apache_avro::to_avro_datum(&avro_schema, record2).unwrap());
 
-        writer = apache_avro::Writer::new(&avro_schema, Vec::new());
         let mut record3 = Record::new(&avro_schema).unwrap();
         record3.put("timestamp", Value::TimestampMillis(1697643448668i64));
         record3.put("identifier", Value::Uuid(uuid::Uuid::new_v4()));
         record3.put("value", Union(0, Box::new(Value::Null)));
-        writer.append(record3).unwrap();
-        let payload3 = writer.into_inner().unwrap();
+        let mut payload3 = base.clone();
+        payload3.extend(apache_avro::to_avro_datum(&avro_schema, record3).unwrap());
 
         let messages = vec![
             OwnedMessage::new(
@@ -400,9 +375,9 @@ mod tests {
                 Some(payload3),
                 Some(String::from("key3").into_bytes()),
                 String::from("topic"),
-                Timestamp::CreateTime(1),
+                Timestamp::CreateTime(2),
                 1,
-                1,
+                2,
                 None,
             ),
         ];
