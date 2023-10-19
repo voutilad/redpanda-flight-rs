@@ -11,6 +11,7 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
+use futures::AsyncReadExt;
 use rdkafka::message::OwnedMessage;
 use rdkafka::Message;
 use tracing::{error, warn};
@@ -98,9 +99,11 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
                 };
                 break;
             }
-        } else if payload.starts_with(&[0u8, 0u8, 0u8, 0u8]) {
+        } else if payload.starts_with(&[0u8]) && payload.len() > 5 {
             // The silly Schema Registry framing. We have a lower-level raw Avro datum.
-            match apache_avro::from_avro_datum(&avro_schema, &mut payload, None) {
+            // Fast-forward 5 bytes.
+            let mut trimmed = payload[5..];
+            match apache_avro::from_avro_datum(&avro_schema, &mut trimmed, None) {
                 Ok(v) => values.push(v),
                 Err(e) => {
                     error!(
@@ -112,6 +115,8 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
                     ));
                 }
             }
+        } else {
+            panic!("crap data?");
         }
         if values.len() != 1 {
             error!("bogus or multi-record value from payload");
