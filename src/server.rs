@@ -13,6 +13,7 @@ use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
+use crate::convert::convert;
 use crate::redpanda::{Redpanda, Topic};
 use crate::registry::Registry;
 
@@ -252,18 +253,29 @@ impl FlightService for RedpandaFlightService {
             // Consume data for now, but drop it.
             match batches.next_batch().await {
                 Ok(b) => {
-                    if b.is_none() || b.unwrap().is_empty() {
+                    if b.is_none() {
                         debug!(
                             "end of stream for topic partition {}/{} detected",
                             topic, pid
                         );
                         break;
                     }
+                    let messages = b.unwrap();
+                    if messages.is_empty() {
+                        debug!(
+                            "end of stream for topic partition {}/{} detected",
+                            topic, pid
+                        );
+                        break;
+                    }
+                    let rb = convert(&messages, &schema);
+                    if rb.is_err() {
+                        return Err(Status::internal(rb.unwrap_err()));
+                    }
+                    results.push(rb.unwrap());
                 }
                 Err(e) => return Err(Status::internal(e)),
             };
-            let rb = RecordBatch::new_empty(schema.arrow.clone());
-            results.push(rb);
         }
         let flight_data = match batches_to_flight_data(&schema.arrow, results) {
             Ok(data) => data,
