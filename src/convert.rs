@@ -11,7 +11,6 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
-use futures::AsyncReadExt;
 use rdkafka::message::OwnedMessage;
 use rdkafka::Message;
 use tracing::{error, warn};
@@ -63,7 +62,7 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
     for message in messages {
         // Build our Apache Avro reader from our payload. We provide the expected schema.
         //
-        let mut payload = match message.payload() {
+        let payload = match message.payload() {
             None => {
                 warn!("empty record in payload");
                 break;
@@ -102,7 +101,7 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
         } else if payload.starts_with(&[0u8]) && payload.len() > 5 {
             // The silly Schema Registry framing. We have a lower-level raw Avro datum.
             // Fast-forward 5 bytes.
-            let mut trimmed = payload[5..];
+            let mut trimmed = &payload[5..];
             match apache_avro::from_avro_datum(&avro_schema, &mut trimmed, None) {
                 Ok(v) => values.push(v),
                 Err(e) => {
