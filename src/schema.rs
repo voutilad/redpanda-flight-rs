@@ -54,7 +54,7 @@ fn avro_to_arrow_types(schema: &avro_schema::Schema) -> Result<arrow_datatypes::
                 ));
             }
 
-            // Should start with a Null type.
+            // Should start with a Null type, but apparently it's not required for nullable Unions.
             let variant = variants.pop_front().unwrap();
             if variant == avro_schema::Schema::Null {
                 return avro_to_arrow_types(&variants.pop_front().unwrap());
@@ -110,6 +110,8 @@ mod tests {
     static SAMPLE_SCHEMA: &str = include_str!("fixtures/sample_value_schema.json");
 
     #[test]
+    /// Validate we can take Avro data (a simplified subset for now) and convert to Apache Arrow
+    /// buffers.
     fn can_convert_avro_schema_to_arrow_schema() {
         let input = RedpandaSchema {
             subject: String::from("sensor-value"),
