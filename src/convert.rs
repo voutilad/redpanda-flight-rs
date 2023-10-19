@@ -73,7 +73,8 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
             Ok(r) => r,
             Err(e) => {
                 error!("error reading payload: {}", e);
-                return Err(e.to_string());
+                // return Err(e.to_string());
+                continue;
             }
         };
 
