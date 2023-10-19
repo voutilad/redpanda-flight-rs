@@ -9,7 +9,7 @@ use arrow::array::{
     Float64Builder, Int32Builder, Int64Builder, NullBuilder, StringBuilder,
     TimestampMillisecondBuilder,
 };
-use arrow::datatypes::{DataType, ToByteSlice};
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use rdkafka::message::OwnedMessage;
 use rdkafka::Message;
@@ -62,43 +62,56 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
     for message in messages {
         // Build our Apache Avro reader from our payload. We provide the expected schema.
         //
-        let payload = match message.payload() {
+        let mut payload = match message.payload() {
             None => {
                 warn!("empty record in payload");
                 break;
             }
             Some(p) => p,
         };
-        // TODO: remove this debug stuff.
-        if !payload.starts_with(&[b'O', b'b', b'j', 1u8]) {
-            let junk = payload.to_byte_slice();
-            warn!(
-                "bad payload? first few bytes don't look right, got {:?}",
-                junk
-            );
-            continue;
-        }
-        let reader = match Reader::with_schema(&avro_schema, payload) {
-            Ok(r) => r,
-            Err(e) => {
-                error!("error reading payload: {}", e);
-                // return Err(e.to_string());
-                continue;
-            }
-        };
 
-        // Decode the Record.
-        // XXX TODO: we assume each payload is a single avro Record (i.e. a single row) for now.
-        let mut values: Vec<Value> = Vec::new();
-        for value in reader {
-            match value {
-                Ok(v) => values.push(v),
+        let mut values: Vec<Value> = Vec::new(); // XXX init for now even if erroring later.
+
+        // TODO: Need to clean this up now that I understand the Schema Registry "framing".
+        if payload.starts_with(&[b'O', b'b', b'j', 1u8]) {
+            // We have a raw, native Avro record.
+
+            let reader = match Reader::with_schema(&avro_schema, payload) {
+                Ok(r) => r,
                 Err(e) => {
-                    error!("failed to read value from payload: {}", e);
-                    return Err(String::from("failed to read value from payload"));
+                    error!("error reading payload: {}", e);
+                    // return Err(e.to_string());
+                    continue;
                 }
             };
-            break;
+
+            // Decode the Record.
+            // XXX TODO: we assume each payload is a single avro Record (i.e. a single row) for now.
+
+            for value in reader {
+                match value {
+                    Ok(v) => values.push(v),
+                    Err(e) => {
+                        error!("failed to read value from raw Avro payload: {}", e);
+                        return Err(String::from("failed to read value from raw Avro payload"));
+                    }
+                };
+                break;
+            }
+        } else if payload.starts_with(&[0u8, 0u8, 0u8, 0u8]) {
+            // The silly Schema Registry framing. We have a lower-level raw Avro datum.
+            match apache_avro::from_avro_datum(&avro_schema, &mut payload, None) {
+                Ok(v) => values.push(v),
+                Err(e) => {
+                    error!(
+                        "failed to read value from Schema Registry-framed payload: {}",
+                        e
+                    );
+                    return Err(String::from(
+                        "failed to read value from Schema Registry-framed payload",
+                    ));
+                }
+            }
         }
         if values.len() != 1 {
             error!("bogus or multi-record value from payload");
