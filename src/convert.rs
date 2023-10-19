@@ -9,7 +9,7 @@ use arrow::array::{
     Float64Builder, Int32Builder, Int64Builder, NullBuilder, StringBuilder,
     TimestampMillisecondBuilder,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, ToByteSlice};
 use arrow::record_batch::RecordBatch;
 use rdkafka::message::OwnedMessage;
 use rdkafka::Message;
@@ -69,6 +69,15 @@ pub fn convert(messages: &Vec<OwnedMessage>, schema: &Schema) -> Result<RecordBa
             }
             Some(p) => p,
         };
+        // TODO: remove this debug stuff.
+        if !payload.starts_with(&[b'O', b'b', b'j', 1u8]) {
+            let junk = payload.to_byte_slice();
+            warn!(
+                "bad payload? first few bytes don't look right, got {:?}",
+                junk
+            );
+            continue;
+        }
         let reader = match Reader::with_schema(&avro_schema, payload) {
             Ok(r) => r,
             Err(e) => {
