@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
 use tonic::Status;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::convert::convert;
 use crate::schema::Schema;
@@ -57,10 +58,11 @@ pub struct BatchingStream {
     /// Target offset determining the end of the stream for a topic partition.
     pub target_offset: i64,
     _permit: OwnedSemaphorePermit,
-    consumer: StreamConsumer<RedpandaContext>,
     last_offset: i64,
     schema: Schema,
     stream_id: usize,
+    backlog: Pin<Box<VecDeque<FlightData>>>,
+    consumer: Pin<Box<StreamConsumer<RedpandaContext>>>,
 }
 
 impl BatchingStream {
@@ -77,94 +79,92 @@ impl BatchingStream {
             remainder: AtomicUsize::new(remainder),
             target_offset,
             _permit: permit,
-            consumer,
             last_offset: 0,
             schema,
             stream_id,
+            backlog: Box::pin(VecDeque::new()),
+            consumer: Box::pin(consumer),
         }
-    }
-
-    /// Consume the next n items.
-    pub async fn next_batch(&self) -> Result<Option<Vec<OwnedMessage>>, String> {
-        // Most likely reason to bail early is we're past our expected watermark.
-        if self.last_offset >= self.target_offset {
-            debug!("stream {} consumed; past watermark", self.stream_id);
-            return Ok(None);
-        }
-
-        // There's a chance we hit our expected limit. Not guaranteed, though.
-        if self.remainder.load(Ordering::Relaxed) == 0 {
-            debug!("stream {} consumed; no messages remaining", self.stream_id);
-            return Ok(None);
-        }
-
-        let mut v: Vec<OwnedMessage> = Vec::with_capacity(self.batch_size);
-        let mut stream = self.consumer.stream();
-        loop {
-            let msg = match stream.next().await {
-                None => return Ok(None),
-                Some(r) => match r {
-                    Ok(m) => m.detach(),
-                    Err(e) => {
-                        error!("kafka error consuming stream: {}", e);
-                        return Err(e.to_string());
-                    }
-                },
-            };
-            let offset = msg.offset();
-            v.push(msg);
-            debug!("added message with offset {}", offset);
-
-            self.remainder.fetch_sub(1, Ordering::Relaxed);
-            if offset >= self.target_offset {
-                break;
-            }
-            if v.len() == self.batch_size {
-                break;
-            }
-        }
-
-        Ok(Some(v))
     }
 }
 
 impl Stream for BatchingStream {
     type Item = Result<FlightData, Status>;
 
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let batch = match futures::executor::block_on(self.next_batch()) {
-            Ok(b) => b,
-            Err(e) => {
-                debug!("error polling next_batch: {}", e);
-                return Poll::Ready(Some(Err(Status::internal(e))));
-            }
-        };
-        let msgs = match batch {
-            None => return Poll::Ready(None),
-            Some(b) => b,
-        };
-        if msgs.is_empty() {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Most likely reason to bail early is we're past our expected watermark.
+        if self.last_offset >= self.target_offset {
+            debug!("stream {} consumed; past watermark", self.stream_id);
             return Poll::Ready(None);
         }
-        let rb = match convert(&msgs, &self.schema) {
+
+        // There's a chance we hit our expected limit. Not guaranteed, though.
+        if self.remainder.load(Ordering::Relaxed) == 0 {
+            debug!("stream {} consumed; no messages remaining", self.stream_id);
+            return Poll::Ready(None);
+        }
+
+        if self.backlog.len() > 0 {
+            let item = self.backlog.as_mut().pop_front();
+            return Poll::Ready(Some(Ok(item.unwrap())));
+        }
+
+        let mut batch: Vec<OwnedMessage> = Vec::with_capacity(self.batch_size);
+
+        // Build up our batch
+        let mut stream = self.consumer.stream();
+        loop {
+            let result = match stream.poll_next_unpin(cx) {
+                Poll::Ready(m) => m,
+                Poll::Pending => {
+                    if batch.len() == 0 {
+                        return Poll::Pending;
+                    }
+                    None // TODO: sleep? What do we do?
+                }
+            };
+            if result.is_none() {
+                break;
+            }
+            let message = match result.unwrap() {
+                Ok(m) => m.detach(),
+                Err(e) => {
+                    error!("error polling next Kafka message: {}", e);
+                    return Poll::Ready(Some(Err(Status::internal(e.to_string()))));
+                }
+            };
+
+            let offset = message.offset();
+            batch.push(message);
+            debug!("added message with offset {} to batch", offset);
+
+            self.remainder.fetch_sub(1, Ordering::Relaxed);
+            if offset >= self.target_offset {
+                break;
+            }
+            if batch.len() == self.batch_size {
+                break;
+            }
+        }
+        drop(stream);
+
+        if batch.is_empty() {
+            return Poll::Ready(None);
+        }
+        let rb = match convert(&batch, &self.schema) {
             Ok(rb) => rb,
             Err(e) => {
                 debug!("stream failed: {}", e);
                 return Poll::Ready(Some(Err(Status::internal(e))));
             }
         };
-        match batches_to_flight_data(&self.schema.arrow, vec![rb]) {
-            Ok(mut data) => {
-                if data.len() == 0 {
-                    return Poll::Ready(None);
-                } else if data.len() == 1 {
-                    return Poll::Ready(Some(Ok(data.pop().unwrap())));
-                }
-                warn!("goofy vector, len = {}", data.len());
-                return Poll::Ready(Some(Err(Status::internal("goofy vector"))));
-            }
-            Err(e) => Poll::Ready(Some(Err(Status::internal(e.to_string())))),
+        let data = batches_to_flight_data(&self.schema.arrow, vec![rb]).unwrap();
+
+        let mut _backlog = self.backlog.as_mut();
+        for datum in data {
+            _backlog.push_back(datum);
         }
+        Poll::Ready(Some(Ok(_backlog.pop_front().unwrap())))
     }
 }
 
