@@ -17,7 +17,7 @@ use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
 use tonic::Status;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::convert::convert;
 use crate::schema::Schema;
@@ -106,6 +106,7 @@ impl Stream for BatchingStream {
 
         if self.backlog.len() > 0 {
             let item = self.backlog.as_mut().pop_front();
+            debug!("emitting a record batch from backlog");
             return Poll::Ready(Some(Ok(item.unwrap())));
         }
 
@@ -113,13 +114,16 @@ impl Stream for BatchingStream {
 
         // Build up our batch
         let mut stream = self.consumer.stream();
+        debug!("created MessageStream");
         loop {
             let result = match stream.poll_next_unpin(cx) {
                 Poll::Ready(m) => m,
                 Poll::Pending => {
                     if batch.len() == 0 {
+                        warn!("pending");
                         return Poll::Pending;
                     }
+                    warn!("uhhh what");
                     None // TODO: sleep? What do we do?
                 }
             };
@@ -149,6 +153,7 @@ impl Stream for BatchingStream {
         drop(stream);
 
         if batch.is_empty() {
+            debug!("stream done?");
             return Poll::Ready(None);
         }
         let rb = match convert(&batch, &self.schema) {
@@ -164,6 +169,7 @@ impl Stream for BatchingStream {
         for datum in data {
             _backlog.push_back(datum);
         }
+        debug!("emitting a record batch");
         Poll::Ready(Some(Ok(_backlog.pop_front().unwrap())))
     }
 }
