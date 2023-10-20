@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tokio::task;
 use tracing::{error, info};
 
-use crate::schema::{RedpandaSchema, Schema};
+use crate::schema::{Schema, SchemaRegistryEntry};
 
 struct RegistryContext;
 
@@ -102,7 +102,7 @@ impl Registry {
                     Err(_) => return Err(String::from("unexpected stream failure")),
                 },
             };
-            let value: RedpandaSchema =
+            let value: SchemaRegistryEntry =
                 serde_json::from_slice(message.payload().unwrap_or(&[])).unwrap();
             let result = Schema::from(&value);
             if result.is_err() {

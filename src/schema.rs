@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::string::String;
 
 use apache_avro::schema as avro_schema;
@@ -19,7 +18,7 @@ pub struct Schema {
 
 /// Represents an entry in the Redpanda Schema Registry as seen from the underlying topic.
 #[derive(Deserialize, Debug)]
-pub struct RedpandaSchema {
+pub struct SchemaRegistryEntry {
     pub subject: String,
     pub version: u64,
     pub id: u64,
@@ -46,20 +45,17 @@ fn avro_to_arrow_types(schema: &avro_schema::Schema) -> Result<arrow_datatypes::
         )),
         avro_schema::Schema::Union(u) => {
             // XXX TODO: for now we only support using Union as a means of letting a field be nullable.
-            let mut variants: VecDeque<avro_schema::Schema> =
-                VecDeque::from_iter(u.variants().iter().map(|s| s.clone()));
+            let variants = u.variants();
             if variants.len() != 2 {
                 return Err(String::from(
                     "Union fields are only supported for creating nullable values",
                 ));
             }
-
             // Should start with a Null type, but apparently it's not required for nullable Unions.
-            let variant = variants.pop_front().unwrap();
-            if variant == avro_schema::Schema::Null {
-                return avro_to_arrow_types(&variants.pop_front().unwrap());
+            if variants[0] == avro_schema::Schema::Null {
+                return avro_to_arrow_types(&variants[1]);
             }
-            return avro_to_arrow_types(&variant);
+            return avro_to_arrow_types(&variants[0]);
         }
         _ => Err(String::from("unsupported Avro schema type")),
     }
@@ -85,7 +81,7 @@ fn avro_to_arrow_schema(
 impl Schema {
     /// Build a Schema from a RedpandaSchema (provided via the Schema Registry), parsing the Apache Avro
     /// schema representation, and generating an analogous Apache Arrow representation.
-    pub fn from(value: &RedpandaSchema) -> Result<Schema, String> {
+    pub fn from(value: &SchemaRegistryEntry) -> Result<Schema, String> {
         let avro = avro_schema::Schema::parse_str(value.schema.as_str()).unwrap();
         let record_schema = match avro {
             avro_schema::Schema::Record(r) => r,
@@ -113,7 +109,7 @@ mod tests {
     /// Validate we can take Avro data (a simplified subset for now) and convert to Apache Arrow
     /// buffers.
     fn can_convert_avro_schema_to_arrow_schema() {
-        let input = RedpandaSchema {
+        let input = SchemaRegistryEntry {
             subject: String::from("sensor-value"),
             version: 1,
             id: 2,

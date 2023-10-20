@@ -312,13 +312,13 @@ mod tests {
     use rdkafka::Timestamp;
 
     use crate::convert::convert;
-    use crate::schema::{RedpandaSchema, Schema};
+    use crate::schema::{Schema, SchemaRegistryEntry};
 
     static SAMPLE_SCHEMA: &str = include_str!("fixtures/sample_value_schema.json");
 
     #[test]
     fn can_convert_avro_record_to_arrow_record_batch() {
-        let input = RedpandaSchema {
+        let input = SchemaRegistryEntry {
             subject: String::from("sensor-value"),
             version: 1,
             id: 2,
