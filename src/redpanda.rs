@@ -17,7 +17,7 @@ use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
 use tonic::Status;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::convert::convert;
 use crate::schema::Schema;
@@ -118,17 +118,10 @@ impl Stream for BatchingStream {
         loop {
             let result = match stream.next().poll_unpin(cx) {
                 Poll::Ready(m) => m,
-                Poll::Pending => {
-                    if batch.len() == 0 {
-                        warn!("pending");
-                        return Poll::Pending;
-                    }
-                    warn!("uhhh what");
-                    None // TODO: sleep? What do we do?
-                }
+                Poll::Pending => None,
             };
             if result.is_none() {
-                break;
+                continue;
             }
             let message = match result.unwrap() {
                 Ok(m) => m.detach(),
