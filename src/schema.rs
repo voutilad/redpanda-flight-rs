@@ -3,10 +3,11 @@ use std::string::String;
 use apache_avro::schema as avro_schema;
 use arrow::datatypes as arrow_datatypes;
 use arrow::datatypes::{SchemaRef, TimeUnit};
-use serde::Deserialize;
 use tracing::debug;
 
-/// Represents a known Redpanda Topic Schema.
+use crate::registry::SchemaRegistryEntry;
+
+/// Represents a known Redpanda Topic's Schema, encapsulating its Apache Avro and Apache Arrow forms.
 #[derive(Clone)]
 pub struct Schema {
     pub topic: String,
@@ -14,15 +15,6 @@ pub struct Schema {
     pub version: i64,
     pub avro: avro_schema::RecordSchema,
     pub arrow: SchemaRef,
-}
-
-/// Represents an entry in the Redpanda Schema Registry as seen from the underlying topic.
-#[derive(Deserialize, Debug)]
-pub struct SchemaRegistryEntry {
-    pub subject: String,
-    pub version: u64,
-    pub id: u64,
-    pub schema: String,
 }
 
 /// Type mapping from an Apache Avro [RecordSchema](avro_schema::RecordSchema) field type to an Apache Arrow [DataType](arrow_datatypes::DataType).
@@ -79,22 +71,37 @@ fn avro_to_arrow_schema(
 }
 
 impl Schema {
-    /// Build a Schema from a RedpandaSchema (provided via the Schema Registry), parsing the Apache Avro
-    /// schema representation, and generating an analogous Apache Arrow representation.
+    /// Build a Schema from an entry in the Redpanda Schema Registry, parsing the Apache Avro
+    /// schema JSON representation, and generating an analogous Apache Arrow representation.
     pub fn from(value: &SchemaRegistryEntry) -> Result<Schema, String> {
         let avro = avro_schema::Schema::parse_str(value.schema.as_str()).unwrap();
         let record_schema = match avro {
             avro_schema::Schema::Record(r) => r,
             _ => return Err(String::from("not a record schema")),
         };
-        let arrow = avro_to_arrow_schema(&record_schema).unwrap();
-        let topic = String::from(value.subject.trim_end_matches("-value"));
+        Schema::from_avro(
+            record_schema,
+            value.subject.as_str(),
+            value.id,
+            value.version,
+        )
+    }
+
+    /// Build a Schema from a given Apache Avro [RecordSchema](avro_schema::RecordSchema).
+    pub fn from_avro(
+        schema: avro_schema::RecordSchema,
+        subject: &str,
+        id: i64,
+        version: i64,
+    ) -> Result<Schema, String> {
+        let arrow = avro_to_arrow_schema(&schema).unwrap();
+        let topic = String::from(subject.trim_end_matches("-value"));
         Ok(Schema {
             topic,
-            id: value.id as i64,
-            version: value.version as i64,
+            id,
+            version,
             arrow: SchemaRef::new(arrow),
-            avro: record_schema,
+            avro: schema,
         })
     }
 }

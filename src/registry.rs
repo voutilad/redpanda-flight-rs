@@ -5,11 +5,12 @@ use futures::StreamExt;
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use tokio::task;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-use crate::schema::{Schema, SchemaRegistryEntry};
+use crate::schema::Schema;
 
 struct RegistryContext;
 
@@ -18,9 +19,19 @@ impl ClientContext for RegistryContext {}
 impl ConsumerContext for RegistryContext {}
 
 /// A client for interacting with the Redpanda Schema Registry via the internal topic (i.e. via the Kafka API).
+/// Maintains a global view of all known [Schema](Schema)
 pub struct Registry {
     pub topic: String,
     map: Arc<RwLock<HashMap<String, Schema>>>,
+}
+
+/// Represents an entry in the Redpanda Schema Registry as seen from the underlying topic.
+#[derive(Deserialize, Debug)]
+pub struct SchemaRegistryEntry {
+    pub subject: String,
+    pub version: i64,
+    pub id: i64,
+    pub schema: String,
 }
 
 impl Registry {
@@ -103,14 +114,23 @@ impl Registry {
                 },
             };
             let value: SchemaRegistryEntry =
-                serde_json::from_slice(message.payload().unwrap_or(&[])).unwrap();
+                match serde_json::from_slice(message.payload().unwrap_or(&[])) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!("deserialization error during hydration: {}", e);
+                        continue; // Skip this entry.
+                    }
+                };
             let result = Schema::from(&value);
             if result.is_err() {
-                info!("can't parse schema for subject {}", value.subject);
-                continue;
+                warn!("can't parse schema for subject {}", value.subject);
+                continue; // Skip this entry.
             }
             let schema = result.unwrap();
-            info!("parsed a schema for {}", schema.topic);
+            info!(
+                "hydrated a schema for {} (id={}, version={})",
+                schema.topic, schema.id, schema.version
+            );
 
             // Grab the write lock and insert.
             let mut map = map.write().await;

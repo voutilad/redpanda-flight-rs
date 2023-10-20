@@ -312,20 +312,18 @@ mod tests {
     use rdkafka::Timestamp;
 
     use crate::convert::convert;
-    use crate::schema::{Schema, SchemaRegistryEntry};
+    use crate::schema::Schema;
 
     static SAMPLE_SCHEMA: &str = include_str!("fixtures/sample_value_schema.json");
 
     #[test]
     fn can_convert_avro_record_to_arrow_record_batch() {
-        let input = SchemaRegistryEntry {
-            subject: String::from("sensor-value"),
-            version: 1,
-            id: 2,
-            schema: String::from(SAMPLE_SCHEMA),
+        let avro_schema = apache_avro::Schema::parse_str(SAMPLE_SCHEMA).unwrap();
+        let record_schema = match avro_schema {
+            apache_avro::Schema::Record(ref r) => r.clone(),
+            _ => panic!("check the fixture schema"),
         };
-        let schema = Schema::from(&input).unwrap();
-        let avro_schema = apache_avro::Schema::Record(schema.avro.clone());
+        let schema = Schema::from_avro(record_schema, "sensor-value", 1, 2).unwrap();
 
         // Our lovely Confluent Schema Registry framing nonsense. /grr.
         let base = vec![0u8, 0u8, 0u8, 0u8, 1u8];
