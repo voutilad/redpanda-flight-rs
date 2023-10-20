@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::FlightData;
-use futures::{Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::message::OwnedMessage;
@@ -116,7 +116,7 @@ impl Stream for BatchingStream {
         let mut stream = self.consumer.stream();
         debug!("created MessageStream");
         loop {
-            let result = match stream.poll_next_unpin(cx) {
+            let result = match stream.next().poll_unpin(cx) {
                 Poll::Ready(m) => m,
                 Poll::Pending => {
                     if batch.len() == 0 {
