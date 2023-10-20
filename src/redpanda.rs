@@ -92,6 +92,12 @@ impl Stream for BatchingStream {
     type Item = Result<FlightData, Status>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.backlog.len() > 0 {
+            let item = self.backlog.as_mut().pop_front();
+            debug!("emitting a record batch from backlog");
+            return Poll::Ready(Some(Ok(item.unwrap())));
+        }
+
         // Most likely reason to bail early is we're past our expected watermark.
         if self.last_offset >= self.target_offset {
             debug!("stream {} consumed; past watermark", self.stream_id);
@@ -102,12 +108,6 @@ impl Stream for BatchingStream {
         if self.remainder.load(Ordering::Relaxed) == 0 {
             debug!("stream {} consumed; no messages remaining", self.stream_id);
             return Poll::Ready(None);
-        }
-
-        if self.backlog.len() > 0 {
-            let item = self.backlog.as_mut().pop_front();
-            debug!("emitting a record batch from backlog");
-            return Poll::Ready(Some(Ok(item.unwrap())));
         }
 
         let mut batch: Vec<OwnedMessage> = Vec::with_capacity(self.batch_size);
@@ -133,7 +133,6 @@ impl Stream for BatchingStream {
 
             let offset = message.offset();
             batch.push(message);
-            debug!("added message with offset {} to batch", offset);
 
             self.remainder.fetch_sub(1, Ordering::Relaxed);
             if offset >= self.target_offset {
@@ -144,6 +143,7 @@ impl Stream for BatchingStream {
             }
         }
         drop(stream);
+        debug!("built batch of {} messages", batch.len());
 
         if batch.is_empty() {
             debug!("stream done?");
