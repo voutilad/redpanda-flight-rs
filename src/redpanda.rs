@@ -16,7 +16,7 @@ use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
 use tonic::Status;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::convert::convert;
 use crate::schema::Schema;
@@ -160,6 +160,7 @@ impl Stream for BatchingStream {
                 } else if data.len() == 1 {
                     return Poll::Ready(Some(Ok(data.pop().unwrap())));
                 }
+                warn!("goofy vector, len = {}", data.len());
                 return Poll::Ready(Some(Err(Status::internal("goofy vector"))));
             }
             Err(e) => Poll::Ready(Some(Err(Status::internal(e.to_string())))),
