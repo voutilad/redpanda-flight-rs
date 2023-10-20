@@ -122,8 +122,7 @@ impl FlightService for RedpandaFlightService {
         &self,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        warn!("get_flight_info not implemented");
-        Err(Status::unimplemented("Implement get_flight_info"))
+        Err(Status::unimplemented("get_flight_info not implemented"))
     }
     async fn get_schema(
         &self,
@@ -294,8 +293,7 @@ impl FlightService for RedpandaFlightService {
         &self,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        warn!("do_put not implemented");
-        Err(Status::unimplemented("Implement do_put"))
+        Err(Status::unimplemented("do_put is not implemented"))
     }
 
     type DoExchangeStream = BoxStream<'static, Result<FlightData, Status>>;
@@ -304,8 +302,7 @@ impl FlightService for RedpandaFlightService {
         &self,
         _request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
-        warn!("do_exchange not implemented");
-        Err(Status::unimplemented("Implement do_exchange"))
+        Err(Status::unimplemented("do_exchange is not implemented"))
     }
 
     type DoActionStream = BoxStream<'static, Result<arrow_flight::Result, Status>>;
@@ -314,8 +311,7 @@ impl FlightService for RedpandaFlightService {
         &self,
         _request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
-        warn!("do_action not implemented");
-        Err(Status::unimplemented("Implement do_action"))
+        Err(Status::unimplemented("do_action is not implemented"))
     }
 
     type ListActionsStream = BoxStream<'static, Result<ActionType, Status>>;
