@@ -1,8 +1,12 @@
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-use futures::StreamExt;
+use arrow_flight::utils::batches_to_flight_data;
+use arrow_flight::FlightData;
+use futures::{Stream, StreamExt};
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::message::OwnedMessage;
@@ -11,7 +15,11 @@ use rdkafka::util::Timeout;
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
+use tonic::Status;
 use tracing::{debug, error, info};
+
+use crate::convert::convert;
+use crate::schema::Schema;
 
 struct RedpandaContext;
 
@@ -44,24 +52,38 @@ pub struct Topic {
 
 pub struct BatchingStream {
     pub batch_size: usize,
-
     /// Estimate of how many messages remain in the stream. May not be accurate due to compaction.
     pub remainder: AtomicUsize,
-
     /// Target offset determining the end of the stream for a topic partition.
     pub target_offset: i64,
-
     _permit: OwnedSemaphorePermit,
-
     consumer: StreamConsumer<RedpandaContext>,
-
-    /// A simple identifier for this stream, for now.
-    stream_id: usize,
-
     last_offset: i64,
+    schema: Schema,
+    stream_id: usize,
 }
 
 impl BatchingStream {
+    fn new(
+        permit: OwnedSemaphorePermit,
+        schema: Schema,
+        consumer: StreamConsumer<RedpandaContext>,
+        target_offset: i64,
+        remainder: usize,
+        stream_id: usize,
+    ) -> BatchingStream {
+        BatchingStream {
+            batch_size: DEFAULT_BATCH_SIZE,
+            remainder: AtomicUsize::new(remainder),
+            target_offset,
+            _permit: permit,
+            consumer,
+            last_offset: 0,
+            schema,
+            stream_id,
+        }
+    }
+
     /// Consume the next n items.
     pub async fn next_batch(&self) -> Result<Option<Vec<OwnedMessage>>, String> {
         // Most likely reason to bail early is we're past our expected watermark.
@@ -103,6 +125,45 @@ impl BatchingStream {
         }
 
         Ok(Some(v))
+    }
+}
+
+impl Stream for BatchingStream {
+    type Item = Result<FlightData, Status>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let batch = match futures::executor::block_on(self.next_batch()) {
+            Ok(b) => b,
+            Err(e) => {
+                debug!("error polling next_batch: {}", e);
+                return Poll::Ready(Some(Err(Status::internal(e))));
+            }
+        };
+        let msgs = match batch {
+            None => return Poll::Ready(None),
+            Some(b) => b,
+        };
+        if msgs.is_empty() {
+            return Poll::Ready(None);
+        }
+        let rb = match convert(&msgs, &self.schema) {
+            Ok(rb) => rb,
+            Err(e) => {
+                debug!("stream failed: {}", e);
+                return Poll::Ready(Some(Err(Status::internal(e))));
+            }
+        };
+        match batches_to_flight_data(&self.schema.arrow, vec![rb]) {
+            Ok(mut data) => {
+                if data.len() == 0 {
+                    return Poll::Ready(None);
+                } else if data.len() == 1 {
+                    return Poll::Ready(Some(Ok(data.pop().unwrap())));
+                }
+                return Poll::Ready(Some(Err(Status::internal("goofy vector"))));
+            }
+            Err(e) => Poll::Ready(Some(Err(Status::internal(e.to_string())))),
+        }
     }
 }
 
@@ -307,7 +368,11 @@ impl Redpanda {
     }
 
     /// Generate a bounded [BatchingStream] from a [TopicPartition].
-    pub async fn stream(&self, tp: &TopicPartition) -> Result<BatchingStream, String> {
+    pub async fn stream(
+        &self,
+        tp: &TopicPartition,
+        schema: &Schema,
+    ) -> Result<BatchingStream, String> {
         let permit = match self.stream_permits.clone().acquire_owned().await {
             Ok(p) => p,
             Err(e) => return Err(e.to_string()),
@@ -362,17 +427,17 @@ impl Redpanda {
         };
 
         debug!(
-            "creating BatchingStream for topic partition {}/{}, target watermark {}, and id {}",
-            tp.topic, tp.id, tp.watermarks.1, stream_id
+            "creating BatchingStream for topic partition {}/{}, target watermark {}",
+            tp.topic, tp.id, tp.watermarks.1
         );
-        Ok(BatchingStream {
-            batch_size: DEFAULT_BATCH_SIZE, // TODO: configure
-            remainder: AtomicUsize::new((tp.watermarks.1 - tp.watermarks.0) as usize),
-            target_offset: tp.watermarks.1 - 1, // XXX Redpanda reports offset + 1!
-            _permit: permit,
+
+        Ok(BatchingStream::new(
+            permit,
+            schema.clone(),
             consumer,
+            tp.watermarks.1 - 1,
+            (tp.watermarks.1 - tp.watermarks.0) as usize,
             stream_id,
-            last_offset: 0,
-        })
+        ))
     }
 }

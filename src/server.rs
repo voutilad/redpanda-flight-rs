@@ -1,19 +1,16 @@
+use std::pin::Pin;
 use std::str::FromStr;
 
-use arrow::array::RecordBatch;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
-use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
-use futures::stream;
 use futures::stream::{BoxStream, StreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
-use crate::convert::convert;
 use crate::redpanda::{Redpanda, Topic};
 use crate::registry::Registry;
 
@@ -239,52 +236,17 @@ impl FlightService for RedpandaFlightService {
                 return Err(Status::not_found("no matching topic partition found"));
             }
         };
-        let batches = match self.redpanda.stream(&tp).await {
+        let stream = match self.redpanda.stream(&tp, &schema).await {
             Ok(s) => s,
             Err(e) => {
                 error!("failed to create stream for {:?}", tp);
                 return Err(Status::internal(e));
             }
         };
-        // TODO: we need to build and return an actual stream lest we block!
-        let mut results: Vec<RecordBatch> = Vec::new();
-        loop {
-            // Consume data for now, but drop it.
-            match batches.next_batch().await {
-                Ok(b) => {
-                    if b.is_none() {
-                        debug!(
-                            "end of stream for topic partition {}/{} detected",
-                            topic, pid
-                        );
-                        break;
-                    }
-                    let messages = b.unwrap();
-                    if messages.is_empty() {
-                        debug!(
-                            "end of stream for topic partition {}/{} detected",
-                            topic, pid
-                        );
-                        break;
-                    }
-                    let rb = convert(&messages, &schema);
-                    if rb.is_err() {
-                        return Err(Status::internal(rb.unwrap_err()));
-                    }
-                    results.push(rb.unwrap());
-                }
-                Err(e) => return Err(Status::internal(e)),
-            };
-        }
-        let flight_data = match batches_to_flight_data(&schema.arrow, results) {
-            Ok(data) => data,
-            Err(e) => return Err(Status::internal(e.to_string())),
-        }
-        .into_iter()
-        .map(Ok);
 
         info!("responding to do_get for topic partition {}/{}", topic, pid);
-        Ok(Response::new(Box::pin(stream::iter(flight_data))))
+        let pinned = Pin::new(Box::new(stream));
+        Ok(Response::new(pinned))
     }
 
     type DoPutStream = BoxStream<'static, Result<PutResult, Status>>;
