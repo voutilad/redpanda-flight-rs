@@ -230,7 +230,7 @@ impl FlightService for RedpandaFlightService {
     ) -> Result<Response<Self::DoGetStream>, Status> {
         // If we're using auth on the backend, we need to look for a basic auth header here. We
         // need to masquerade as the client/user, sadly. (That means we have a target on our backs.)
-        let auth: Option<Auth> = request.metadata().get("Authorization").map_or(None, |v| {
+        let auth: Option<Auth> = request.metadata().get("authorization").map_or(None, |v| {
             parse_basic_auth(v.as_bytes(), &self.auth_mechanism, &self.auth_protocol)
         });
 
