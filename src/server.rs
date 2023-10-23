@@ -1,6 +1,6 @@
-use std::pin::Pin;
 use std::str::FromStr;
 
+use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::{
@@ -8,6 +8,7 @@ use arrow_flight::{
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
 use futures::stream::{BoxStream, StreamExt};
+use futures::TryStreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
@@ -236,17 +237,22 @@ impl FlightService for RedpandaFlightService {
                 return Err(Status::not_found("no matching topic partition found"));
             }
         };
-        let stream = match self.redpanda.stream(&tp, &schema).await {
-            Ok(s) => s,
+        let batches = match self.redpanda.stream(&tp, &schema).await {
+            Ok(bs) => bs,
             Err(e) => {
                 error!("failed to create stream for {:?}", tp);
                 return Err(Status::internal(e));
             }
         };
 
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema.arrow)
+            .with_flight_descriptor(None)
+            .build(batches)
+            .map_err(Into::into); // Needed to unpack the FlightError's into Status's
+
         info!("responding to do_get for topic partition {}/{}", topic, pid);
-        let pinned = Pin::new(Box::new(stream));
-        Ok(Response::new(pinned))
+        Ok(Response::new(stream.boxed()))
     }
 
     type DoPutStream = BoxStream<'static, Result<PutResult, Status>>;

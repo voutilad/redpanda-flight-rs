@@ -1,12 +1,11 @@
-use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use arrow_flight::utils::batches_to_flight_data;
-use arrow_flight::FlightData;
+use arrow::array::RecordBatch;
+use arrow_flight::error::FlightError;
 use futures::{FutureExt, Stream, StreamExt};
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, StreamConsumer};
@@ -16,7 +15,6 @@ use rdkafka::util::Timeout;
 use rdkafka::{ClientConfig, ClientContext, Message, Offset, TopicPartitionList};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
-use tonic::Status;
 use tracing::{debug, error, info};
 
 use crate::convert::convert;
@@ -61,7 +59,6 @@ pub struct BatchingStream {
     last_offset: i64,
     schema: Schema,
     stream_id: usize,
-    backlog: Pin<Box<VecDeque<FlightData>>>,
     consumer: Pin<Box<StreamConsumer<RedpandaContext>>>,
 }
 
@@ -82,22 +79,15 @@ impl BatchingStream {
             last_offset: 0,
             schema,
             stream_id,
-            backlog: Box::pin(VecDeque::new()),
             consumer: Box::pin(consumer),
         }
     }
 }
 
 impl Stream for BatchingStream {
-    type Item = Result<FlightData, Status>;
+    type Item = Result<RecordBatch, FlightError>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.backlog.len() > 0 {
-            let item = self.backlog.as_mut().pop_front();
-            debug!("emitting a record batch from backlog");
-            return Poll::Ready(Some(Ok(item.unwrap())));
-        }
-
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Most likely reason to bail early is we're past our expected watermark.
         if self.last_offset >= self.target_offset {
             debug!("stream {} consumed; past watermark", self.stream_id);
@@ -127,7 +117,7 @@ impl Stream for BatchingStream {
                 Ok(m) => m.detach(),
                 Err(e) => {
                     error!("error polling next Kafka message: {}", e);
-                    return Poll::Ready(Some(Err(Status::internal(e.to_string()))));
+                    return Poll::Ready(Some(Err(FlightError::ExternalError(Box::new(e)))));
                 }
             };
 
@@ -153,17 +143,12 @@ impl Stream for BatchingStream {
             Ok(rb) => rb,
             Err(e) => {
                 debug!("stream failed: {}", e);
-                return Poll::Ready(Some(Err(Status::internal(e))));
+                return Poll::Ready(Some(Err(FlightError::DecodeError(e)))); // TODO: use a better error that's semantically valid
             }
         };
-        let data = batches_to_flight_data(&self.schema.arrow, vec![rb]).unwrap();
 
-        let mut _backlog = self.backlog.as_mut();
-        for datum in data {
-            _backlog.push_back(datum);
-        }
         debug!("emitting a record batch");
-        Poll::Ready(Some(Ok(_backlog.pop_front().unwrap())))
+        Poll::Ready(Some(Ok(rb)))
     }
 }
 
