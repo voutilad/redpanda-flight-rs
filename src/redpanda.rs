@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -50,6 +51,7 @@ pub struct Topic {
 }
 
 /// The security protocol to use for connecting to Redpanda.
+#[derive(Debug)]
 pub enum AuthProtocol {
     Plaintext,
     SaslPlain,
@@ -70,6 +72,7 @@ impl AuthProtocol {
 }
 
 /// The SASL mechanism.
+#[derive(Debug)]
 pub enum AuthMechanism {
     Plain,
     ScramSha256,
@@ -113,6 +116,16 @@ pub struct Auth {
     pub password: String,
     pub protocol: AuthProtocol,
     pub mechanism: AuthMechanism,
+}
+
+impl Display for Auth {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Auth{{username={},password=***,protocol={:?},mechanism={:?}}}",
+            self.username, self.protocol, self.mechanism
+        )
+    }
 }
 
 pub struct BatchingStream {
@@ -235,6 +248,8 @@ impl Redpanda {
         if admin_auth.is_some() {
             let auth = admin_auth.as_ref().unwrap();
             base_config = base_config
+                .set("sasl.username", &auth.username)
+                .set("sasl.password", &auth.password)
                 .set("security.protocol", auth.protocol.as_str())
                 .set("sasl.mechanisms", auth.mechanism.as_str())
                 .clone();

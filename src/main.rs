@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber;
 
 use crate::redpanda::{Auth, AuthMechanism, AuthProtocol};
@@ -23,6 +23,7 @@ async fn main() -> ExitCode {
 
     let seeds = env::var("REDPANDA_BROKERS").unwrap_or(String::from("localhost:9092"));
     let topic = env::var("REDPANDA_SCHEMA_TOPIC").unwrap_or(String::from("_schemas"));
+    info!("using Schema Registry topic {} via seed {}", topic, seeds);
 
     let env_username = env::var("REDPANDA_SASL_USERNAME");
     let env_password = env::var("REDPANDA_SASL_PASSWORD");
@@ -74,6 +75,11 @@ async fn main() -> ExitCode {
         }
         Err(_) => None,
     };
+    if auth.is_some() {
+        info!("using authentication: {}", auth.as_ref().unwrap());
+    } else {
+        warn!("not using authentication to talk to Redpanda");
+    }
 
     let addr = env::var("REDPANDA_FLIGHT_ADDR")
         .unwrap_or(String::from("127.0.0.1:9999"))

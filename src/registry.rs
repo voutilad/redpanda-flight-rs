@@ -53,6 +53,8 @@ impl Registry {
         if admin_auth.is_some() {
             let auth = admin_auth.as_ref().unwrap();
             base_config = base_config
+                .set("sasl.username", &auth.username)
+                .set("sasl.password", &auth.password)
                 .set("security.protocol", auth.protocol.as_str())
                 .set("sasl.mechanisms", auth.mechanism.as_str())
                 .clone();
