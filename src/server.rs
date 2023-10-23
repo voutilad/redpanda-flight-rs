@@ -26,6 +26,7 @@ pub struct RedpandaFlightService {
     pub registry: Registry,
     pub seeds: String,
 
+    require_auth: bool,
     auth_mechanism: AuthMechanism,
     auth_protocol: AuthProtocol,
 }
@@ -61,6 +62,7 @@ impl RedpandaFlightService {
                 seeds: String::from(seeds),
                 auth_mechanism: auth.mechanism.clone(),
                 auth_protocol: auth.protocol.clone(),
+                require_auth: true,
             })
         } else {
             Ok(RedpandaFlightService {
@@ -69,6 +71,7 @@ impl RedpandaFlightService {
                 seeds: String::from(seeds),
                 auth_mechanism: AuthMechanism::Plain,
                 auth_protocol: AuthProtocol::Plaintext,
+                require_auth: false,
             })
         }
     }
@@ -231,14 +234,18 @@ impl FlightService for RedpandaFlightService {
             parse_basic_auth(v.as_bytes(), &self.auth_mechanism, &self.auth_protocol)
         });
 
+        if auth.is_none() && self.require_auth {
+            return Err(Status::unauthenticated("unauthorized"));
+        }
+
         // Decompose ticket
         // N.b. Apache Kafka topics are ascii.
         // See Apache Kafka's clients/src/main/java/org/apache/kafka/common/internals/Topic.java
         let ticket = request.into_inner().ticket;
         if !ticket.is_ascii() {
-            return Err(Status::failed_precondition(String::from(
+            return Err(Status::failed_precondition(
                 "redpanda-flight tickets must be ascii",
-            )));
+            ));
         }
         if !ticket.contains(
             TICKET_SEPARATOR
