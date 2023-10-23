@@ -132,7 +132,6 @@ impl Stream for BatchingStream {
                 break;
             }
         }
-        drop(stream);
         debug!("built batch of {} messages", batch.len());
 
         if batch.is_empty() {
