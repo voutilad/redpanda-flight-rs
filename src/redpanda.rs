@@ -51,7 +51,7 @@ pub struct Topic {
 }
 
 /// The security protocol to use for connecting to Redpanda.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AuthProtocol {
     Plaintext,
     SaslPlain,
@@ -72,7 +72,7 @@ impl AuthProtocol {
 }
 
 /// The SASL mechanism.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AuthMechanism {
     Plain,
     ScramSha256,
@@ -446,6 +446,7 @@ impl Redpanda {
         &self,
         tp: &TopicPartition,
         schema: &Schema,
+        auth: Option<Auth>,
     ) -> Result<BatchingStream, String> {
         let permit = match self.stream_permits.clone().acquire_owned().await {
             Ok(p) => p,
@@ -455,11 +456,21 @@ impl Redpanda {
 
         // TODO: batching goes here?
         // TODO: max.poll.records or something?
-        let base_config: ClientConfig = ClientConfig::new()
+        let mut base_config: ClientConfig = ClientConfig::new()
             .set("bootstrap.servers", self.seeds.clone())
             .set("group.id", format!("redpanda-flight-stream-{}", stream_id))
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
+
+        if auth.is_some() {
+            let auth = auth.as_ref().unwrap();
+            base_config = base_config
+                .set("sasl.username", &auth.username)
+                .set("sasl.password", &auth.password)
+                .set("security.protocol", auth.protocol.as_str())
+                .set("sasl.mechanisms", auth.mechanism.as_str())
+                .clone();
+        }
 
         let mut tpl = TopicPartitionList::new();
         tpl.add_partition(tp.topic.as_str(), tp.id);

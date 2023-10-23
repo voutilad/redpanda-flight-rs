@@ -7,12 +7,13 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
+use base64::Engine;
 use futures::stream::{BoxStream, StreamExt};
 use futures::TryStreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
-use crate::redpanda::{Auth, Redpanda, Topic};
+use crate::redpanda::{Auth, AuthMechanism, AuthProtocol, Redpanda, Topic};
 use crate::registry::Registry;
 
 /// Used to join a topic name and a partition id to form a ticket. By choice, this separator
@@ -24,6 +25,9 @@ pub struct RedpandaFlightService {
     pub redpanda: Redpanda,
     pub registry: Registry,
     pub seeds: String,
+
+    auth_mechanism: AuthMechanism,
+    auth_protocol: AuthProtocol,
 }
 
 impl RedpandaFlightService {
@@ -46,12 +50,72 @@ impl RedpandaFlightService {
                 return Err(e);
             }
         };
-        Ok(RedpandaFlightService {
-            redpanda,
-            registry,
-            seeds: String::from(seeds),
-        })
+
+        // TODO: for now we assume the client auth mechanism and protocols match the backend.
+        // N.b. This means the client can't use a different SASL SCRAM mechanism.
+        if admin_auth.is_some() {
+            let auth = admin_auth.unwrap();
+            Ok(RedpandaFlightService {
+                redpanda,
+                registry,
+                seeds: String::from(seeds),
+                auth_mechanism: auth.mechanism.clone(),
+                auth_protocol: auth.protocol.clone(),
+            })
+        } else {
+            Ok(RedpandaFlightService {
+                redpanda,
+                registry,
+                seeds: String::from(seeds),
+                auth_mechanism: AuthMechanism::Plain,
+                auth_protocol: AuthProtocol::Plaintext,
+            })
+        }
     }
+}
+
+/// Decode a Basic Auth HTTP header into an [`Auth`] assuming the provided mechanism and protocol.
+/// See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Authorization
+/// Returns [`None`] on failure.
+fn parse_basic_auth(
+    bytes: &[u8],
+    mechanism: &AuthMechanism,
+    protocol: &AuthProtocol,
+) -> Option<Auth> {
+    if bytes.len() < "Basic ".as_bytes().len() {
+        debug!("malformed auth header: too short");
+        return None;
+    }
+
+    // Payload should be small, so copying it shouldn't be an issue.
+    let raw = match String::from_utf8(Vec::from(bytes.strip_prefix(b"Basic ")?)) {
+        Ok(r) => r,
+        Err(_) => {
+            warn!("malformed auth header: not basic auth");
+            return None;
+        }
+    };
+    let decoded = match base64::engine::general_purpose::STANDARD.decode(raw) {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("malformed auth header: {}", e);
+            return None;
+        }
+    };
+
+    let idx = decoded.iter().rposition(|c| c == &b':').unwrap_or(0);
+    if idx == 0 {
+        debug!("malformed auth header: missing delimiter");
+        return None;
+    }
+    let (username, password) = decoded.split_at(idx);
+
+    Some(Auth {
+        username: String::from_utf8_lossy(username).to_string(),
+        password: String::from_utf8_lossy(password).to_string(),
+        protocol: protocol.clone(),
+        mechanism: mechanism.clone(),
+    })
 }
 
 #[tonic::async_trait]
@@ -64,6 +128,7 @@ impl FlightService for RedpandaFlightService {
         warn!("handshake not implemented");
         Err(Status::unimplemented("Implement handshake"))
     }
+
     type ListFlightsStream = BoxStream<'static, Result<FlightInfo, Status>>;
     async fn list_flights(
         &self,
@@ -120,12 +185,14 @@ impl FlightService for RedpandaFlightService {
         let stream = futures::stream::iter(results);
         Ok(Response::new(stream.boxed()))
     }
+
     async fn get_flight_info(
         &self,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("get_flight_info not implemented"))
     }
+
     async fn get_schema(
         &self,
         _request: Request<FlightDescriptor>,
@@ -158,6 +225,12 @@ impl FlightService for RedpandaFlightService {
         &self,
         request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
+        // If we're using auth on the backend, we need to look for a basic auth header here. We
+        // need to masquerade as the client/user, sadly. (That means we have a target on our backs.)
+        let auth: Option<Auth> = request.metadata().get("Authorization").map_or(None, |v| {
+            parse_basic_auth(v.as_bytes(), &self.auth_mechanism, &self.auth_protocol)
+        });
+
         // Decompose ticket
         // N.b. Apache Kafka topics are ascii.
         // See Apache Kafka's clients/src/main/java/org/apache/kafka/common/internals/Topic.java
@@ -241,7 +314,7 @@ impl FlightService for RedpandaFlightService {
                 return Err(Status::not_found("no matching topic partition found"));
             }
         };
-        let batches = match self.redpanda.stream(&tp, &schema).await {
+        let batches = match self.redpanda.stream(&tp, &schema, auth).await {
             Ok(bs) => bs,
             Err(e) => {
                 error!("failed to create stream for {:?}", tp);
@@ -298,5 +371,42 @@ impl FlightService for RedpandaFlightService {
         })];
         let actions_stream = futures::stream::iter(actions);
         Ok(Response::new(actions_stream.boxed()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::redpanda::{AuthMechanism, AuthProtocol};
+    use crate::server::parse_basic_auth;
+
+    const GOOD_SAMPLE1_IN: &str = "bXktdXNlcm5hbWU6bXktc3VwZXItc2VjcmV0OnBhc3N3b3JkIV4K";
+    const GOOD_SAMPLE1_USER: &str = "my-username";
+    const GOOD_SAMPLE1_PASS: &str = r#"my-super-secret:password!^"#;
+
+    const GOOD_SAMPLE2_IN: &str = "bXktdXNlcm5hbWU6bXktc3VwZXItc2VjcmV0OnBhc3N3b3JkIV4yCg==";
+    const GOOD_SAMPLE2_USER: &str = "my-username";
+    const GOOD_SAMPLE2_PASS: &str = r#"my-super-secret:password!^2"#;
+
+    #[test]
+    fn can_convert_basic_auth() {
+        let mechanism = AuthMechanism::ScramSha512;
+        let protocol = AuthProtocol::SaslSsl;
+
+        let mut maybe_auth = parse_basic_auth(GOOD_SAMPLE1_IN.as_bytes(), &mechanism, &protocol);
+        assert!(maybe_auth.is_some(), "should have a result");
+
+        let mut auth = maybe_auth.unwrap();
+        assert_eq!(mechanism, auth.mechanism, "mechanism should be unchanged");
+        assert_eq!(protocol, auth.protocol, "protocol should be unchanged");
+        assert_eq!(GOOD_SAMPLE1_USER, auth.username, "username should match");
+        assert_eq!(GOOD_SAMPLE1_PASS, auth.password, "password should match");
+
+        maybe_auth = parse_basic_auth(GOOD_SAMPLE2_IN.as_bytes(), &mechanism, &protocol);
+        assert!(maybe_auth.is_some(), "should have a result");
+        auth = maybe_auth.unwrap();
+        assert_eq!(mechanism, auth.mechanism, "mechanism should be unchanged");
+        assert_eq!(protocol, auth.protocol, "protocol should be unchanged");
+        assert_eq!(GOOD_SAMPLE2_USER, auth.username, "username should match");
+        assert_eq!(GOOD_SAMPLE2_PASS, auth.password, "password should match");
     }
 }
