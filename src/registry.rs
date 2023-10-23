@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use tokio::task;
 use tracing::{error, info, warn};
 
+use crate::redpanda::Auth;
 use crate::schema::Schema;
 
 struct RegistryContext;
@@ -36,14 +37,26 @@ pub struct SchemaRegistryEntry {
 
 impl Registry {
     /// Create a new Registry instance.
-    pub async fn new(topic: &str, seeds: &str) -> Result<Registry, String> {
-        let base_config: ClientConfig = ClientConfig::new()
+    pub async fn new(
+        topic: &str,
+        seeds: &str,
+        admin_auth: &Option<Auth>,
+    ) -> Result<Registry, String> {
+        let mut base_config: ClientConfig = ClientConfig::new()
             .set("group.id", "redpanda-flight-registry")
             .set("bootstrap.servers", seeds)
             .set("auto.offset.reset", "earliest")
             .set("enable.auto.commit", "true")
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
+
+        if admin_auth.is_some() {
+            let auth = admin_auth.as_ref().unwrap();
+            base_config = base_config
+                .set("security.protocol", auth.protocol.as_str())
+                .set("sasl.mechanisms", auth.mechanism.as_str())
+                .clone();
+        }
 
         // We don't use subscription mode as that creates consumer group behavior.
         let mut tpl = TopicPartitionList::new();

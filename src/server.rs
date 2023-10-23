@@ -12,7 +12,7 @@ use futures::TryStreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, warn};
 
-use crate::redpanda::{Redpanda, Topic};
+use crate::redpanda::{Auth, Redpanda, Topic};
 use crate::registry::Registry;
 
 /// Used to join a topic name and a partition id to form a ticket. By choice, this separator
@@ -27,15 +27,19 @@ pub struct RedpandaFlightService {
 }
 
 impl RedpandaFlightService {
-    pub async fn new(seeds: &str, schemas_topic: &str) -> Result<RedpandaFlightService, String> {
-        let redpanda = match Redpanda::connect(seeds).await {
+    pub async fn new(
+        seeds: &str,
+        schemas_topic: &str,
+        admin_auth: Option<Auth>,
+    ) -> Result<RedpandaFlightService, String> {
+        let redpanda = match Redpanda::connect(seeds, &admin_auth).await {
             Ok(r) => r,
             Err(e) => {
                 error!("failed to create Redpanda service: {}", e);
                 return Err(e);
             }
         };
-        let registry = match Registry::new(schemas_topic, seeds).await {
+        let registry = match Registry::new(schemas_topic, seeds, &admin_auth).await {
             Ok(r) => r,
             Err(e) => {
                 error!("failed to create Registry service: {}", e);

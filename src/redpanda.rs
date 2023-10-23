@@ -49,6 +49,72 @@ pub struct Topic {
     pub partitions: Vec<TopicPartition>,
 }
 
+/// The security protocol to use for connecting to Redpanda.
+pub enum AuthProtocol {
+    Plaintext,
+    SaslPlain,
+    SaslSsl,
+    Ssl,
+}
+
+impl AuthProtocol {
+    /// Convert the [`AuthProtocol`] to a [`&str`].
+    pub fn as_str(&self) -> &str {
+        match self {
+            AuthProtocol::Plaintext => "plaintext",
+            AuthProtocol::SaslPlain => "sasl_plaintext",
+            AuthProtocol::SaslSsl => "sasl_ssl",
+            AuthProtocol::Ssl => "ssl",
+        }
+    }
+}
+
+/// The SASL mechanism.
+pub enum AuthMechanism {
+    Plain,
+    ScramSha256,
+    ScramSha512,
+}
+
+impl AuthMechanism {
+    /// Convert the [`AuthMechanism`] to a [`&str`].
+    pub fn as_str(&self) -> &str {
+        match self {
+            AuthMechanism::Plain => "PLAIN",
+            AuthMechanism::ScramSha256 => "SCRAM-SHA-256",
+            AuthMechanism::ScramSha512 => "SCRAM-SHA-512",
+        }
+    }
+
+    /// Lookup the [`AuthMechanism`] by the given string value in a case-insensitive way.
+    #[allow(dead_code)]
+    pub fn from_str(s: &str) -> AuthMechanism {
+        match s.to_lowercase().as_str() {
+            "plain" => AuthMechanism::Plain,
+            "scram-sha-256" => AuthMechanism::ScramSha256,
+            "scram-sha-512" => AuthMechanism::ScramSha512,
+            _ => AuthMechanism::Plain,
+        }
+    }
+
+    /// Lookup the [`AuthMechanism`] by the given string value in a case-insensitive way.
+    pub fn from_string(s: &String) -> AuthMechanism {
+        match s.to_lowercase().as_str() {
+            "plain" => AuthMechanism::Plain,
+            "scram-sha-256" => AuthMechanism::ScramSha256,
+            "scram-sha-512" => AuthMechanism::ScramSha512,
+            _ => AuthMechanism::Plain,
+        }
+    }
+}
+
+pub struct Auth {
+    pub username: String,
+    pub password: String,
+    pub protocol: AuthProtocol,
+    pub mechanism: AuthMechanism,
+}
+
 pub struct BatchingStream {
     pub batch_size: usize,
     /// Estimate of how many messages remain in the stream. May not be accurate due to compaction.
@@ -160,11 +226,20 @@ pub struct Redpanda {
 
 impl Redpanda {
     /// Initialize a Redpanda connection, establishing the metadata client.
-    pub async fn connect(seeds: &str) -> Result<Redpanda, String> {
-        let base_config: ClientConfig = ClientConfig::new()
+    pub async fn connect(seeds: &str, admin_auth: &Option<Auth>) -> Result<Redpanda, String> {
+        let mut base_config: ClientConfig = ClientConfig::new()
             .set("bootstrap.servers", seeds)
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
+
+        if admin_auth.is_some() {
+            let auth = admin_auth.as_ref().unwrap();
+            base_config = base_config
+                .set("security.protocol", auth.protocol.as_str())
+                .set("sasl.mechanisms", auth.mechanism.as_str())
+                .clone();
+        }
+
         let metadata_client: BaseConsumer<RedpandaContext> =
             match base_config.create_with_context(RedpandaContext {}) {
                 Ok(c) => c,
