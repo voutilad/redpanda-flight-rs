@@ -57,16 +57,16 @@ fn avro_to_arrow_types(schema: &avro_schema::Schema) -> Result<arrow_datatypes::
 fn avro_to_arrow_schema(
     avro: &avro_schema::RecordSchema,
 ) -> Result<arrow_datatypes::Schema, String> {
-    let fields: Vec<arrow_datatypes::Field> = avro
-        .fields
-        .iter()
-        .map(|f| {
-            debug!("checking field {:?}", f.schema);
-            let datatype = avro_to_arrow_types(&f.schema).unwrap();
-            arrow_datatypes::Field::new(&f.name, datatype, f.is_nullable())
-        })
-        .collect();
-
+    let mut fields: Vec<arrow_datatypes::Field> = Vec::new();
+    for f in avro.fields.iter() {
+        debug!("checking field {:?}", f.schema);
+        let datatype = avro_to_arrow_types(&f.schema)?;
+        fields.push(arrow_datatypes::Field::new(
+            &f.name,
+            datatype,
+            f.is_nullable(),
+        ))
+    }
     Ok(arrow_datatypes::Schema::new(fields))
 }
 
@@ -94,7 +94,7 @@ impl Schema {
         id: i64,
         version: i64,
     ) -> Result<Schema, String> {
-        let arrow = avro_to_arrow_schema(&schema).unwrap();
+        let arrow = avro_to_arrow_schema(&schema)?;
         let topic = String::from(subject.trim_end_matches("-value"));
         Ok(Schema {
             topic,
@@ -111,6 +111,7 @@ mod tests {
     use super::*;
 
     static SAMPLE_SCHEMA: &str = include_str!("fixtures/sample_value_schema.json");
+    static COMPLEX_SCHEMA: &str = include_str!("fixtures/sample_complex_schema.json");
 
     #[test]
     /// Validate we can take Avro data (a simplified subset for now) and convert to Apache Arrow
@@ -144,6 +145,22 @@ mod tests {
                 .data_type()
                 .clone(),
             "timestamp should be in millis"
+        );
+    }
+
+    #[test]
+    /// Validate we don't blow up on complex schema.
+    fn does_not_panic_on_unsupported_avro() {
+        let input = SchemaRegistryEntry {
+            subject: String::from("complex-value"),
+            version: 1,
+            id: 2,
+            schema: String::from(COMPLEX_SCHEMA),
+        };
+        let schema = Schema::from(&input);
+        assert!(
+            schema.is_err(),
+            "schema should fail to parse, but not panic"
         );
     }
 }

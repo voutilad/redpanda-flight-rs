@@ -1,0 +1,35 @@
+{
+  "type": "record",
+  "name": "complex_example",
+  "fields": [
+    {
+      "name": "nested",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Value",
+          "fields": [
+            {
+              "name": "id",
+              "type": [
+                "null",
+                "int"
+              ],
+              "default": null
+            },
+            {
+              "name": "name",
+              "type": [
+                "null",
+                "string"
+              ],
+              "default": null
+            }
+          ],
+          "connect.name": "psql2.public.junk.Value"
+        }
+      ]
+    }
+  ]
+}
