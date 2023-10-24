@@ -492,6 +492,7 @@ impl Redpanda {
         // Create our consumer by spawning a blocking task. The initial partition assignment
         // can cause a Kafka API request to a broker, so it's considered blocking.
         //
+        let topic_name = tp.topic.clone();
         let future = task::spawn_blocking(move || {
             let consumer: StreamConsumer<RedpandaContext> =
                 match base_config.create_with_context(RedpandaContext {}) {
@@ -501,6 +502,19 @@ impl Redpanda {
                         return None;
                     }
                 };
+
+            // XXX This is a blocking call.
+            // Try to fetch metadata here to trigger authentication before stream handling.
+            match consumer.fetch_metadata(
+                Some(topic_name.as_str()),
+                Timeout::After(Duration::from_secs(5)),
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("error fetching metadata for topic {}: {}", topic_name, e);
+                    return None;
+                }
+            }
 
             // XXX This is the blocking call.
             match consumer.assign(&tpl) {
