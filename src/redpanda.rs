@@ -197,10 +197,10 @@ impl Stream for BatchingStream {
             // TODO: we need to catch that auth issue here somehow!!! XXXXXX
             if result.is_none() {
                 debug!("empty result set?");
-                //if batch.len() > 0 {
-                return Poll::Pending;
-                //}
-                //continue;
+                if batch.is_empty() {
+                    return Poll::Pending;
+                }
+                continue;
             }
             let message = match result.unwrap() {
                 Ok(m) => m.detach(),
