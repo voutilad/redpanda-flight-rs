@@ -480,6 +480,7 @@ impl Redpanda {
                 ),
             )
             .set("auto.offset.reset", "earliest")
+            .set("enable.auto.commit", "true")
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
 
