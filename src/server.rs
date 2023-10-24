@@ -106,7 +106,7 @@ fn parse_basic_auth(
         }
     };
 
-    let idx = decoded.iter().rposition(|c| c == &b':').unwrap_or(0);
+    let idx = decoded.iter().position(|c| c == &b':').unwrap_or(0);
     if idx == 0 {
         debug!("malformed auth header: missing delimiter");
         return None;
@@ -115,6 +115,7 @@ fn parse_basic_auth(
 
     // strip the : prefix
     password = password.strip_prefix(b":")?;
+    password = password.strip_suffix(b"\n")?;
 
     Some(Auth {
         username: String::from_utf8_lossy(username).to_string(),
@@ -386,14 +387,16 @@ impl FlightService for RedpandaFlightService {
 
 #[cfg(test)]
 mod tests {
+    use tracing::info;
+
     use crate::redpanda::{AuthMechanism, AuthProtocol};
     use crate::server::parse_basic_auth;
 
-    const GOOD_SAMPLE1_IN: &str = "bXktdXNlcm5hbWU6bXktc3VwZXItc2VjcmV0OnBhc3N3b3JkIV4K";
+    const GOOD_SAMPLE1_IN: &str = "Basic bXktdXNlcm5hbWU6bXktc3VwZXItc2VjcmV0OnBhc3N3b3JkIV4K";
     const GOOD_SAMPLE1_USER: &str = "my-username";
     const GOOD_SAMPLE1_PASS: &str = r#"my-super-secret:password!^"#;
 
-    const GOOD_SAMPLE2_IN: &str = "bXktdXNlcm5hbWU6bXktc3VwZXItc2VjcmV0OnBhc3N3b3JkIV4yCg==";
+    const GOOD_SAMPLE2_IN: &str = "Basic bXktdXNlcm5hbWU6bXktc3VwZXItc2VjcmV0OnBhc3N3b3JkIV4yCg==";
     const GOOD_SAMPLE2_USER: &str = "my-username";
     const GOOD_SAMPLE2_PASS: &str = r#"my-super-secret:password!^2"#;
 
@@ -406,6 +409,7 @@ mod tests {
         assert!(maybe_auth.is_some(), "should have a result");
 
         let mut auth = maybe_auth.unwrap();
+        info!("auth.password = {}", auth.password);
         assert_eq!(mechanism, auth.mechanism, "mechanism should be unchanged");
         assert_eq!(protocol, auth.protocol, "protocol should be unchanged");
         assert_eq!(GOOD_SAMPLE1_USER, auth.username, "username should match");
