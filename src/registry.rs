@@ -56,7 +56,7 @@ impl Registry {
                 .set("sasl.username", &auth.username)
                 .set("sasl.password", &auth.password)
                 .set("security.protocol", auth.protocol.as_str())
-                .set("sasl.mechanisms", auth.mechanism.as_str())
+                .set("sasl.mechanism", auth.mechanism.as_str())
                 .clone();
         }
 

@@ -259,7 +259,7 @@ impl Redpanda {
                 .set("sasl.username", &auth.username)
                 .set("sasl.password", &auth.password)
                 .set("security.protocol", auth.protocol.as_str())
-                .set("sasl.mechanisms", auth.mechanism.as_str())
+                .set("sasl.mechanism", auth.mechanism.as_str())
                 .clone();
         }
 
@@ -481,7 +481,7 @@ impl Redpanda {
                 .set("sasl.username", &auth.username)
                 .set("sasl.password", &auth.password)
                 .set("security.protocol", auth.protocol.as_str())
-                .set("sasl.mechanisms", auth.mechanism.as_str())
+                .set("sasl.mechanism", auth.mechanism.as_str())
                 .clone();
         }
 
@@ -507,6 +507,7 @@ impl Redpanda {
                     }
                 };
 
+            // XXX This is a blocking call.
             // XXX This is a blocking call.
             // Try to fetch metadata here to trigger authentication before stream handling.
             match consumer.fetch_metadata(
