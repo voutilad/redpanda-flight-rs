@@ -27,7 +27,7 @@ impl ClientContext for RedpandaContext {}
 
 impl ConsumerContext for RedpandaContext {}
 
-const DEFAULT_BATCH_SIZE: usize = 1_000;
+const DEFAULT_BATCH_SIZE: usize = 100_000;
 static STREAM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Represents information about a Topic-Partition in Redpanda.
