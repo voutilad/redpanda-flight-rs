@@ -187,9 +187,14 @@ impl Stream for BatchingStream {
         loop {
             let result = match stream.next().poll_unpin(cx) {
                 Poll::Ready(m) => m,
-                Poll::Pending => None,
+                Poll::Pending => {
+                    debug!("got pending response from poll_unpin");
+                    None
+                }
             };
+            // TODO: we need to catch that auth issue here somehow!!! XXXXXX
             if result.is_none() {
+                debug!("empty result set?");
                 continue;
             }
             let message = match result.unwrap() {
