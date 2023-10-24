@@ -474,8 +474,8 @@ impl Redpanda {
         if auth.is_some() {
             let auth = auth.as_ref().unwrap();
             debug!(
-                "creating stream for user {} against {:?}",
-                &auth.username, tp
+                "creating stream against {:?} using {}",
+                &auth.username, auth
             );
             base_config = base_config
                 .set("sasl.username", &auth.username)
