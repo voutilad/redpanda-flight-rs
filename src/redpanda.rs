@@ -195,11 +195,12 @@ impl Stream for BatchingStream {
                 }
             };
             if result.is_none() {
-                debug!("empty result set?");
                 if batch.is_empty() {
-                    return Poll::Pending;
+                    debug!("got pending and no data in batch");
+                    // return Poll::Pending;
+                    continue;
                 }
-                continue;
+                debug!("got pending but have {} records, flushing", batch.len());
             }
             let message = match result.unwrap() {
                 Ok(m) => m.detach(),
