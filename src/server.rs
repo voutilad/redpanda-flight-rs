@@ -111,7 +111,10 @@ fn parse_basic_auth(
         debug!("malformed auth header: missing delimiter");
         return None;
     }
-    let (username, password) = decoded.split_at(idx);
+    let (username, mut password) = decoded.split_at(idx);
+
+    // strip the : prefix
+    password = password.strip_prefix(":")?;
 
     Some(Auth {
         username: String::from_utf8_lossy(username).to_string(),

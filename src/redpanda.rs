@@ -479,7 +479,6 @@ impl Redpanda {
                 "creating stream against {:?} using {}",
                 &auth.username, auth
             );
-            debug!("XXX password is: {}", &auth.password);
             base_config = base_config
                 .set("sasl.username", &auth.username)
                 .set("sasl.password", &auth.password)
