@@ -194,7 +194,6 @@ impl Stream for BatchingStream {
                     None
                 }
             };
-            // TODO: we need to catch that auth issue here somehow!!! XXXXXX
             if result.is_none() {
                 debug!("empty result set?");
                 if batch.is_empty() {
@@ -472,7 +471,13 @@ impl Redpanda {
         // TODO: max.poll.records or something?
         let mut base_config: ClientConfig = ClientConfig::new()
             .set("bootstrap.servers", self.seeds.clone())
-            .set("group.id", format!("redpanda-flight-stream-{}", stream_id))
+            .set(
+                "group.id",
+                format!(
+                    "redpanda-flight-stream-{}",
+                    uuid::Uuid::new_v4().as_hyphenated().to_string()
+                ),
+            )
             .set("auto.offset.reset", "earliest")
             .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
