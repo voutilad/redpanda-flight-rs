@@ -114,7 +114,7 @@ fn parse_basic_auth(
     let (username, mut password) = decoded.split_at(idx);
 
     // strip the : prefix
-    password = password.strip_prefix(":")?;
+    password = password.strip_prefix(b":")?;
 
     Some(Auth {
         username: String::from_utf8_lossy(username).to_string(),
