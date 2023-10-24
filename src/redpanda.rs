@@ -196,11 +196,10 @@ impl Stream for BatchingStream {
             };
             if result.is_none() {
                 if batch.is_empty() {
-                    debug!("got pending and no data in batch");
-                    // return Poll::Pending;
+                    // XXX TODO: this is a busy wait...need a way to tie into wakeup
                     continue;
                 }
-                debug!("got pending but have {} records, flushing", batch.len());
+                // XXX Eagerly flush the batch for now.
                 break;
             }
             let message = match result.unwrap() {
