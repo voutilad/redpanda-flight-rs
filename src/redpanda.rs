@@ -473,6 +473,10 @@ impl Redpanda {
 
         if auth.is_some() {
             let auth = auth.as_ref().unwrap();
+            debug!(
+                "creating stream for user {} against {:?}",
+                &auth.username, tp
+            );
             base_config = base_config
                 .set("sasl.username", &auth.username)
                 .set("sasl.password", &auth.password)
@@ -516,7 +520,7 @@ impl Redpanda {
                 }
             }
 
-            // XXX This is the blocking call.
+            // XXX This is maybe a blocking call?
             match consumer.assign(&tpl) {
                 Ok(_) => Some(consumer),
                 Err(e) => {
