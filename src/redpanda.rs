@@ -201,6 +201,7 @@ impl Stream for BatchingStream {
                     continue;
                 }
                 debug!("got pending but have {} records, flushing", batch.len());
+                break;
             }
             let message = match result.unwrap() {
                 Ok(m) => m.detach(),
