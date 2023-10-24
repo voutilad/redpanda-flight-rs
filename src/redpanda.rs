@@ -123,7 +123,9 @@ impl Display for Auth {
         write!(
             f,
             "Auth{{username={},password=***,protocol={:?},mechanism={:?}}}",
-            self.username, self.protocol, self.mechanism
+            self.username,
+            self.protocol.as_str(),
+            self.mechanism.as_str()
         )
     }
 }
