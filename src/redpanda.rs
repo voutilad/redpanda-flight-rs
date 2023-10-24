@@ -469,7 +469,7 @@ impl Redpanda {
         let mut base_config: ClientConfig = ClientConfig::new()
             .set("bootstrap.servers", self.seeds.clone())
             .set("group.id", format!("redpanda-flight-stream-{}", stream_id))
-            .set_log_level(RDKafkaLogLevel::Warning)
+            .set_log_level(RDKafkaLogLevel::Debug)
             .clone();
 
         if auth.is_some() {
