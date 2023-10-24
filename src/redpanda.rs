@@ -469,7 +469,8 @@ impl Redpanda {
         let mut base_config: ClientConfig = ClientConfig::new()
             .set("bootstrap.servers", self.seeds.clone())
             .set("group.id", format!("redpanda-flight-stream-{}", stream_id))
-            .set_log_level(RDKafkaLogLevel::Debug)
+            .set("auto.offset.reset", "earliest")
+            .set_log_level(RDKafkaLogLevel::Warning)
             .clone();
 
         if auth.is_some() {
@@ -511,6 +512,7 @@ impl Redpanda {
             // XXX This is a blocking call.
             // XXX This is a blocking call.
             // Try to fetch metadata here to trigger authentication before stream handling.
+            /*
             match consumer.fetch_metadata(
                 Some(topic_name.as_str()),
                 Timeout::After(Duration::from_secs(5)),
@@ -521,6 +523,8 @@ impl Redpanda {
                     return None;
                 }
             }
+
+             */
 
             // XXX This is maybe a blocking call?
             match consumer.assign(&tpl) {
