@@ -479,6 +479,7 @@ impl Redpanda {
                 "creating stream against {:?} using {}",
                 &auth.username, auth
             );
+            debug!("XXX password is: {}", &auth.password);
             base_config = base_config
                 .set("sasl.username", &auth.username)
                 .set("sasl.password", &auth.password)
@@ -510,21 +511,14 @@ impl Redpanda {
                 };
 
             // XXX This is a blocking call.
-            // XXX This is a blocking call.
             // Try to fetch metadata here to trigger authentication before stream handling.
-            /*
-            match consumer.fetch_metadata(
-                Some(topic_name.as_str()),
-                Timeout::After(Duration::from_secs(5)),
-            ) {
+            match consumer.fetch_metadata(None, Timeout::After(Duration::from_secs(5))) {
                 Ok(_) => {}
                 Err(e) => {
                     error!("error fetching metadata for topic {}: {}", topic_name, e);
                     return None;
                 }
             }
-
-             */
 
             // XXX This is maybe a blocking call?
             match consumer.assign(&tpl) {
