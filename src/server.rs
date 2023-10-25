@@ -239,6 +239,7 @@ impl FlightService for RedpandaFlightService {
         });
 
         if auth.is_none() && self.require_auth {
+            debug!("missing auth! headers: {:?}", request.metadata());
             return Err(Status::unauthenticated(
                 "unauthorized: no authentication token provided",
             ));
