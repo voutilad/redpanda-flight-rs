@@ -486,16 +486,15 @@ impl Redpanda {
 
         if auth.is_some() {
             let auth = auth.as_ref().unwrap();
-            debug!(
-                "creating stream against {:?} using {}",
-                &auth.username, auth
-            );
+            debug!("creating stream for {:?} using {}", tp, auth);
             base_config = base_config
                 .set("sasl.username", &auth.username)
                 .set("sasl.password", &auth.password)
                 .set("security.protocol", auth.protocol.as_str())
                 .set("sasl.mechanism", auth.mechanism.as_str())
                 .clone();
+        } else {
+            debug!("creating stream for {:?} without authentication (!)", tp);
         }
 
         let mut tpl = TopicPartitionList::new();
