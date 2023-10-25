@@ -116,8 +116,15 @@ fn parse_basic_auth(
     let (username, mut password) = decoded.split_at(idx);
 
     // strip the : prefix
-    password = password.strip_prefix(b":")?;
-    password = password.strip_suffix(b"\n")?;
+    password = match password.strip_prefix(b":") {
+        None => password,
+        Some(p) => p,
+    };
+    // strip a newline if we have one
+    password = match password.strip_suffix(b"\n") {
+        None => password,
+        Some(p) => p,
+    };
 
     Some(Auth {
         username: String::from_utf8_lossy(username).to_string(),
