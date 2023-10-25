@@ -21,6 +21,8 @@ use crate::registry::Registry;
 const TICKET_SEPARATOR: &str = "/";
 const TICKET_SEPARATOR_BYTE: &u8 = &b'/';
 
+const AUTH_HEADER_KEY: &str = "authorization";
+
 pub struct RedpandaFlightService {
     pub redpanda: Redpanda,
     pub registry: Registry,
@@ -234,17 +236,18 @@ impl FlightService for RedpandaFlightService {
     ) -> Result<Response<Self::DoGetStream>, Status> {
         // If we're using auth on the backend, we need to look for a basic auth header here. We
         // need to masquerade as the client/user, sadly. (That means we have a target on our backs.)
-        let auth: Option<Auth> = request
-            .metadata()
-            .clone()
-            .into_headers()
-            .get("authorization")
-            .map_or(None, |v| {
-                parse_basic_auth(v.as_bytes(), &self.auth_mechanism, &self.auth_protocol)
-            });
+        let auth = match request.metadata().get(AUTH_HEADER_KEY) {
+            None => {
+                debug!("failed to get {}", AUTH_HEADER_KEY);
+                None
+            }
+            Some(value) => {
+                parse_basic_auth(value.as_bytes(), &self.auth_mechanism, &self.auth_protocol)
+            }
+        };
 
         if auth.is_none() && self.require_auth {
-            debug!("missing auth! headers: {:?}", request.metadata());
+            debug!("missing valid auth! headers: {:?}", request.metadata());
             return Err(Status::unauthenticated(
                 "unauthorized: no authentication token provided",
             ));
