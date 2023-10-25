@@ -1,4 +1,5 @@
 # Redpanda Flight
+<img src="https://github.com/voutilad/redpanda-flight-rs/assets/9891346/d38bd97b-67a0-4e60-bc5c-a9ee25fa587b" width="300"/>
 
 > "There is an art, it says, or rather, a knack to flying. The knack lies in learning how to throw yourself at the
 > ground and miss."
