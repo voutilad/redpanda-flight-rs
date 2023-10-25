@@ -189,10 +189,7 @@ impl Stream for BatchingStream {
         loop {
             let result = match stream.next().poll_unpin(cx) {
                 Poll::Ready(m) => m,
-                Poll::Pending => {
-                    debug!("got pending response from poll_unpin");
-                    None
-                }
+                Poll::Pending => None,
             };
             if result.is_none() {
                 if batch.is_empty() {
