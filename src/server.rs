@@ -126,24 +126,9 @@ fn parse_basic_auth(
         Some(p) => p,
     };
 
-    let utf8_username = match String::from_utf8(Vec::from(username)) {
-        Ok(u) => u,
-        Err(e) => {
-            warn!("failed to utf8 decode username: {}", e);
-            return None;
-        }
-    };
-    let utf8_password = match String::from_utf8(Vec::from(password)) {
-        Ok(p) => p,
-        Err(e) => {
-            warn!("failed to utf8 decode password: {}", e);
-            return None;
-        }
-    };
-
     Some(Auth {
-        username: utf8_username,
-        password: utf8_password,
+        username: String::from_utf8_lossy(username).to_string(),
+        password: String::from_utf8_lossy(password).to_string(),
         protocol: protocol.clone(),
         mechanism: mechanism.clone(),
     })
