@@ -115,26 +115,29 @@ async fn main() -> ExitCode {
         }
     };
 
-    let redpanda = server::RedpandaFlightService::new(seeds.as_str(), topic.as_str(), auth).await;
-    if redpanda.is_err() {
-        return ExitCode::FAILURE;
-    }
-    let svc = FlightServiceServer::new(redpanda.unwrap());
-
-    // Launch the flight service.
+    // Build the flight service and optionally configure TLS for the front-end.
     let mut builder = Server::builder();
     if tls_config.is_some() {
         builder = match builder.tls_config(tls_config.unwrap()) {
             Ok(s) => {
-                info!("configured front-end for TLS");
-                s
-            }
+                info!("configured TLS for the Redpanda Flight front-end");
+                s},
             Err(e) => {
                 error!("failed to initialize tls config: {}", e);
                 return ExitCode::FAILURE;
             }
         };
     }
+
+    // Start up our back-end. This will begin connecting to Redpanda, so if the
+    // backend setup is bad, we'll never expose the front-end Flight service.
+    let redpanda = server::RedpandaFlightService::new(seeds.as_str(), topic.as_str(), auth).await;
+    if redpanda.is_err() {
+        return ExitCode::FAILURE;
+    }
+    let svc = FlightServiceServer::new(redpanda.unwrap());
+
+    // Launch the front-end. This blocks until we're asked to shutdown.
     if builder.add_service(svc).serve(addr).await.is_err() {
         return ExitCode::FAILURE;
     }
