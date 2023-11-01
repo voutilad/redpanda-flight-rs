@@ -313,6 +313,7 @@ impl Redpanda {
         let pairs: Vec<(String, Vec<i32>)> = metadata
             .topics()
             .iter()
+            .filter(|t| !t.name().starts_with("_"))
             .map(|t| {
                 let topic = String::from(t.name());
                 let pids = t.partitions().iter().map(|p| p.id()).collect();
