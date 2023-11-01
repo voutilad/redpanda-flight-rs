@@ -98,7 +98,7 @@ async fn main() -> ExitCode {
     info!("listening on {}", addr);
 
     // XXX We require TLS on the front-end if we're using it on the back-end to prevent security
-    // footguns. To prevent the illusion of security, we expect both sides to be using TLS or not.
+    // foot-guns. To prevent the illusion of security, we expect both sides to be using TLS or not.
     let tls_config: Option<ServerTlsConfig> = match use_tls {
         true => {
             // TODO: graceful error handling
@@ -125,7 +125,10 @@ async fn main() -> ExitCode {
     let mut builder = Server::builder();
     if tls_config.is_some() {
         builder = match builder.tls_config(tls_config.unwrap()) {
-            Ok(s) => s,
+            Ok(s) => {
+                info!("configured front-end for TLS");
+                s
+            }
             Err(e) => {
                 error!("failed to initialize tls config: {}", e);
                 return ExitCode::FAILURE;
