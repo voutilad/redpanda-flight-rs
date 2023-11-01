@@ -181,15 +181,13 @@ impl FlightService for RedpandaFlightService {
                                 .sum(),
                         );
                     for tp in t.partitions {
-                        info = info.with_endpoint(
-                            FlightEndpoint::new()
-                                .with_location("grpc+tcp://localhost:9999")
-                                .with_ticket(Ticket::new(String::from_iter([
-                                    t.topic.clone().as_str(),
-                                    TICKET_SEPARATOR,
-                                    tp.id.to_string().as_str(),
-                                ]))),
-                        )
+                        info = info.with_endpoint(FlightEndpoint::new().with_ticket(Ticket::new(
+                            String::from_iter([
+                                t.topic.clone().as_str(),
+                                TICKET_SEPARATOR,
+                                tp.id.to_string().as_str(),
+                            ]),
+                        )))
                     }
                     Ok(info)
                 }
